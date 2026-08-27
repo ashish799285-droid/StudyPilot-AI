@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { StudentProfile } from "../types";
 import { auth, db, googleProvider, isFirebaseConfigured } from "../services/firebaseConfig";
+import { cleanFirestoreData } from "../utils/firestoreSanitizer";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -100,10 +101,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setUser(updated);
 
               if (changed) {
-                await updateDoc(userDocRef, {
+                await updateDoc(userDocRef, cleanFirestoreData({
                   streakDays: updated.streakDays,
                   lastStudyDate: updated.lastStudyDate,
-                }).catch((e) => console.warn("Could not sync streak:", e));
+                })).catch((e) => console.warn("Could not sync streak:", e));
               }
             } else {
               // Create initial user doc in Firestore
@@ -120,7 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 completedTasksCount: 0,
               };
 
-              await setDoc(userDocRef, newProfile);
+              await setDoc(userDocRef, cleanFirestoreData(newProfile));
               setUser(newProfile);
             }
           } else {
@@ -192,7 +193,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           totalStudyMinutes: 0,
           completedTasksCount: 0,
         };
-        await setDoc(userDocRef, newProfile);
+        await setDoc(userDocRef, cleanFirestoreData(newProfile));
         setUser(newProfile);
       }
     }
@@ -219,7 +220,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (db && user.uid) {
       try {
         const userDocRef = doc(db, "users", user.uid);
-        await updateDoc(userDocRef, updates);
+        await updateDoc(userDocRef, cleanFirestoreData(updates));
       } catch (err) {
         console.error("Failed to update profile in Firestore:", err);
       }
@@ -240,10 +241,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (db && user.uid) {
       try {
         const userDocRef = doc(db, "users", user.uid);
-        await updateDoc(userDocRef, {
+        await updateDoc(userDocRef, cleanFirestoreData({
           totalStudyMinutes: newMinutes,
           lastStudyDate: today,
-        });
+        }));
       } catch (err) {
         console.error("Failed to record study session in Firestore:", err);
       }
@@ -262,9 +263,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (db && user.uid) {
       try {
         const userDocRef = doc(db, "users", user.uid);
-        await updateDoc(userDocRef, {
+        await updateDoc(userDocRef, cleanFirestoreData({
           completedTasksCount: newCount,
-        });
+        }));
       } catch (err) {
         console.error("Failed to record task completed in Firestore:", err);
       }

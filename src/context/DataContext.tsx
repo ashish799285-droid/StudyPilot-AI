@@ -9,6 +9,7 @@ import {
 } from "../types";
 import { useAuth } from "./AuthContext";
 import { db } from "../services/firebaseConfig";
+import { cleanFirestoreData } from "../utils/firestoreSanitizer";
 import {
   collection,
   query,
@@ -19,6 +20,7 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  arrayUnion,
 } from "firebase/firestore";
 
 interface DataContextType {
@@ -30,6 +32,7 @@ interface DataContextType {
   setActivePlan: (planId: string) => Promise<void>;
   toggleTaskCompletion: (planId: string, weekNumber: number, dayName: string, taskId: string) => Promise<void>;
   deleteStudyPlan: (planId: string) => Promise<void>;
+  deleteAllStudyPlans: () => Promise<void>;
 
   // Notes
   notes: NoteItem[];
@@ -50,7 +53,7 @@ interface DataContextType {
   activeSession: ChatSession | null;
   createChatSession: (subject: string, academicLevel: string, firstMessage?: string) => Promise<ChatSession>;
   selectChatSession: (sessionId: string) => void;
-  addMessageToActiveSession: (message: Omit<ChatMessage, "id" | "timestamp">) => Promise<void>;
+  addMessageToActiveSession: (message: Omit<ChatMessage, "id" | "timestamp">, targetSessionId?: string) => Promise<void>;
   deleteChatSession: (sessionId: string) => Promise<void>;
   clearChatSession: (sessionId: string) => Promise<void>;
 
@@ -93,98 +96,105 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 1. Study Plans Listener
     const plansQuery = query(collection(db, "studyPlans"), where("userId", "==", userId));
     const unsubPlans = onSnapshot(plansQuery, async (snapshot) => {
+      const seededKey = `studypilot_plans_seeded_${userId}`;
       if (snapshot.empty) {
-        // Seed default comprehensive plan into Firestore for instant experience
-        const defaultPlanId = `plan_${Date.now()}_seed`;
-        const defaultPlan: StudyPlan = {
-          id: defaultPlanId,
-          userId: userId,
-          title: "Midterm Mastery & Core Concept Sprint",
-          summary: "A high-impact 2-week structured roadmap balancing active recall, deep problem solving, and spaced review.",
-          examName: "College Midterm Examinations",
-          examDate: "In 14 Days",
-          totalHoursPerWeek: 18,
-          active: true,
-          createdAt: Date.now(),
-          weeklyMilestones: [
-            {
-              weekNumber: 1,
-              theme: "Core Foundations, Mechanism Synthesis & Active Drills",
-              focusGoals: ["Master reaction mechanisms", "Solve 50+ medium practice problems", "Complete formula sheets"],
-              days: [
-                {
-                  dayName: "Monday",
-                  focusSubject: "Organic Chemistry",
-                  tasks: [
-                    { id: "t-1", title: "Review SN1/SN2 Reaction Mechanisms & Energy Diagrams", durationMinutes: 45, priority: "High", type: "Concept Learning", completed: true },
-                    { id: "t-2", title: "Practice Problem Set #4: Stereochemistry & Nucleophilicity", durationMinutes: 45, priority: "High", type: "Active Recall", completed: true },
-                    { id: "t-3", title: "Flashcard session on reagent tables (30 cards)", durationMinutes: 20, priority: "Medium", type: "Flashcards", completed: true },
-                  ],
-                },
-                {
-                  dayName: "Tuesday",
-                  focusSubject: "Data Structures & Algorithms",
-                  tasks: [
-                    { id: "t-4", title: "Binary Search Trees, Rotations & AVL Tree Balances", durationMinutes: 60, priority: "High", type: "Deep Work", completed: true },
-                    { id: "t-5", title: "Implement 3 Tree Traversal algorithms on code editor", durationMinutes: 45, priority: "High", type: "Coding Drill", completed: false },
-                  ],
-                },
-                {
-                  dayName: "Wednesday",
-                  focusSubject: "Cell Biology & Genetics",
-                  tasks: [
-                    { id: "t-6", title: "Cellular Respiration & Krebs Cycle Electron Transport Chain", durationMinutes: 50, priority: "High", type: "Concept Learning", completed: false },
-                    { id: "t-7", title: "Diagram drawing & oxidative phosphorylation pathway", durationMinutes: 30, priority: "Medium", type: "Active Recall", completed: false },
-                  ],
-                },
-                {
-                  dayName: "Thursday",
-                  focusSubject: "Calculus II & Differential Equations",
-                  tasks: [
-                    { id: "t-8", title: "Integration by Parts & Trigonometric Substitution practice", durationMinutes: 60, priority: "High", type: "Practice Problems", completed: false },
-                    { id: "t-9", title: "Error Log Review: redo tricky improper integrals", durationMinutes: 30, priority: "Medium", type: "Review", completed: false },
-                  ],
-                },
-                {
-                  dayName: "Friday",
-                  focusSubject: "Mixed Subject Review",
-                  tasks: [
-                    { id: "t-10", title: "Timed 30-minute Mock Diagnostic Quiz across all subjects", durationMinutes: 45, priority: "High", type: "Self-Assessment", completed: false },
-                    { id: "t-11", title: "Consolidate week 1 cheat sheets and summary notes", durationMinutes: 35, priority: "Medium", type: "Synthesis", completed: false },
-                  ],
-                },
-              ],
-            },
-            {
-              weekNumber: 2,
-              theme: "Advanced Exam Simulation & Speed Optimization",
-              focusGoals: ["Complete 2 full timed past papers", "Zero in on weak areas"],
-              days: [
-                {
-                  dayName: "Monday",
-                  focusSubject: "Organic Chemistry",
-                  tasks: [
-                    { id: "t-12", title: "Multi-step Synthesis Retrosynthesis challenge problems", durationMinutes: 60, priority: "High", type: "Deep Work", completed: false },
-                  ],
-                },
-                {
-                  dayName: "Wednesday",
-                  focusSubject: "Data Structures",
-                  tasks: [
-                    { id: "t-13", title: "Graph Traversals (BFS, DFS, Dijkstra) mock test", durationMinutes: 60, priority: "High", type: "Exam Simulation", completed: false },
-                  ],
-                },
-              ],
-            },
-          ],
-          proTips: [
-            "Use 50-minute study blocks followed by 10-minute active stretch breaks.",
-            "Write explanations in your own words (Feynman Technique) before reading lecture slides.",
-            "Never look at answer keys before attempting a problem for at least 8 solid minutes.",
-          ],
-        };
-        await setDoc(doc(db, "studyPlans", defaultPlanId), defaultPlan).catch((e) => console.warn("Seed plan err:", e));
+        if (!localStorage.getItem(seededKey)) {
+          // Seed default comprehensive plan into Firestore for instant first-time experience
+          localStorage.setItem(seededKey, "true");
+          const defaultPlanId = `plan_${Date.now()}_seed`;
+          const defaultPlan: StudyPlan = {
+            id: defaultPlanId,
+            userId: userId,
+            title: "Midterm Mastery & Core Concept Sprint",
+            summary: "A high-impact 2-week structured roadmap balancing active recall, deep problem solving, and spaced review.",
+            examName: "College Midterm Examinations",
+            examDate: "In 14 Days",
+            totalHoursPerWeek: 18,
+            active: true,
+            createdAt: Date.now(),
+            weeklyMilestones: [
+              {
+                weekNumber: 1,
+                theme: "Core Foundations, Mechanism Synthesis & Active Drills",
+                focusGoals: ["Master reaction mechanisms", "Solve 50+ medium practice problems", "Complete formula sheets"],
+                days: [
+                  {
+                    dayName: "Monday",
+                    focusSubject: "Organic Chemistry",
+                    tasks: [
+                      { id: "t-1", title: "Review SN1/SN2 Reaction Mechanisms & Energy Diagrams", durationMinutes: 45, priority: "High", type: "Concept Learning", completed: true },
+                      { id: "t-2", title: "Practice Problem Set #4: Stereochemistry & Nucleophilicity", durationMinutes: 45, priority: "High", type: "Active Recall", completed: true },
+                      { id: "t-3", title: "Flashcard session on reagent tables (30 cards)", durationMinutes: 20, priority: "Medium", type: "Flashcards", completed: true },
+                    ],
+                  },
+                  {
+                    dayName: "Tuesday",
+                    focusSubject: "Data Structures & Algorithms",
+                    tasks: [
+                      { id: "t-4", title: "Binary Search Trees, Rotations & AVL Tree Balances", durationMinutes: 60, priority: "High", type: "Deep Work", completed: true },
+                      { id: "t-5", title: "Implement 3 Tree Traversal algorithms on code editor", durationMinutes: 45, priority: "High", type: "Coding Drill", completed: false },
+                    ],
+                  },
+                  {
+                    dayName: "Wednesday",
+                    focusSubject: "Cell Biology & Genetics",
+                    tasks: [
+                      { id: "t-6", title: "Cellular Respiration & Krebs Cycle Electron Transport Chain", durationMinutes: 50, priority: "High", type: "Concept Learning", completed: false },
+                      { id: "t-7", title: "Diagram drawing & oxidative phosphorylation pathway", durationMinutes: 30, priority: "Medium", type: "Active Recall", completed: false },
+                    ],
+                  },
+                  {
+                    dayName: "Thursday",
+                    focusSubject: "Calculus II & Differential Equations",
+                    tasks: [
+                      { id: "t-8", title: "Integration by Parts & Trigonometric Substitution practice", durationMinutes: 60, priority: "High", type: "Practice Problems", completed: false },
+                      { id: "t-9", title: "Error Log Review: redo tricky improper integrals", durationMinutes: 30, priority: "Medium", type: "Review", completed: false },
+                    ],
+                  },
+                  {
+                    dayName: "Friday",
+                    focusSubject: "Mixed Subject Review",
+                    tasks: [
+                      { id: "t-10", title: "Timed 30-minute Mock Diagnostic Quiz across all subjects", durationMinutes: 45, priority: "High", type: "Self-Assessment", completed: false },
+                      { id: "t-11", title: "Consolidate week 1 cheat sheets and summary notes", durationMinutes: 35, priority: "Medium", type: "Synthesis", completed: false },
+                    ],
+                  },
+                ],
+              },
+              {
+                weekNumber: 2,
+                theme: "Advanced Exam Simulation & Speed Optimization",
+                focusGoals: ["Complete 2 full timed past papers", "Zero in on weak areas"],
+                days: [
+                  {
+                    dayName: "Monday",
+                    focusSubject: "Organic Chemistry",
+                    tasks: [
+                      { id: "t-12", title: "Multi-step Synthesis Retrosynthesis challenge problems", durationMinutes: 60, priority: "High", type: "Deep Work", completed: false },
+                    ],
+                  },
+                  {
+                    dayName: "Wednesday",
+                    focusSubject: "Data Structures",
+                    tasks: [
+                      { id: "t-13", title: "Graph Traversals (BFS, DFS, Dijkstra) mock test", durationMinutes: 60, priority: "High", type: "Exam Simulation", completed: false },
+                    ],
+                  },
+                ],
+              },
+            ],
+            proTips: [
+              "Use 50-minute study blocks followed by 10-minute active stretch breaks.",
+              "Write explanations in your own words (Feynman Technique) before reading lecture slides.",
+              "Never look at answer keys before attempting a problem for at least 8 solid minutes.",
+            ],
+          };
+          await setDoc(doc(db, "studyPlans", defaultPlanId), defaultPlan).catch((e) => console.warn("Seed plan err:", e));
+        } else {
+          setStudyPlans([]);
+        }
       } else {
+        localStorage.setItem(seededKey, "true");
         const loaded: StudyPlan[] = [];
         snapshot.forEach((docSnap) => loaded.push(docSnap.data() as StudyPlan));
         loaded.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -454,7 +464,7 @@ Would you like to try a practice substrate together to test this rule?`,
       }
     }
 
-    await setDoc(doc(db, "studyPlans", planId), newPlan);
+    await setDoc(doc(db, "studyPlans", planId), cleanFirestoreData(newPlan));
     return newPlan;
   };
 
@@ -497,22 +507,52 @@ Would you like to try a practice substrate together to test this rule?`,
       await recordTaskCompleted();
     }
 
-    await updateDoc(doc(db, "studyPlans", planId), {
+    await updateDoc(doc(db, "studyPlans", planId), cleanFirestoreData({
       weeklyMilestones: updatedWeeklyMilestones,
-    });
+    }));
   };
 
   const updateStudyPlan = async (planId: string, updates: Partial<StudyPlan>) => {
     if (!userId || !db) return;
-    await updateDoc(doc(db, "studyPlans", planId), {
+    await updateDoc(doc(db, "studyPlans", planId), cleanFirestoreData({
       ...updates,
       updatedAt: Date.now(),
-    });
+    }));
   };
 
-  const deleteStudyPlan = async (planId: string) => {
+  const deleteStudyPlan = async (planId: string): Promise<void> => {
     if (!userId || !db) return;
-    await deleteDoc(doc(db, "studyPlans", planId));
+    // Optimistic UI state update
+    setStudyPlans((prev) => {
+      const remaining = prev.filter((p) => p.id !== planId);
+      const wasActive = prev.find((p) => p.id === planId)?.active;
+      if (wasActive && remaining.length > 0) {
+        remaining[0] = { ...remaining[0], active: true };
+      }
+      return remaining;
+    });
+
+    try {
+      await deleteDoc(doc(db, "studyPlans", planId));
+    } catch (err) {
+      console.error(`[Firestore Error] Failed to delete studyPlans/${planId}:`, err);
+      throw err;
+    }
+  };
+
+  const deleteAllStudyPlans = async (): Promise<void> => {
+    if (!userId || !db) return;
+    const plansToDelete = studyPlans.filter((p) => p.userId === userId);
+    // Optimistic UI state update
+    setStudyPlans([]);
+
+    try {
+      const deletePromises = plansToDelete.map((p) => deleteDoc(doc(db, "studyPlans", p.id)));
+      await Promise.all(deletePromises);
+    } catch (err) {
+      console.error("[Firestore Error] Failed to delete all study plans:", err);
+      throw err;
+    }
   };
 
   // Notes Actions
@@ -539,16 +579,16 @@ Would you like to try a practice substrate together to test this rule?`,
       updatedAt: Date.now(),
     };
 
-    await setDoc(doc(db, "notes", noteId), newNote);
+    await setDoc(doc(db, "notes", noteId), cleanFirestoreData(newNote));
     return newNote;
   };
 
   const updateNote = async (id: string, updates: Partial<NoteItem>) => {
     if (!userId || !db) return;
-    await updateDoc(doc(db, "notes", id), {
+    await updateDoc(doc(db, "notes", id), cleanFirestoreData({
       ...updates,
       updatedAt: Date.now(),
-    });
+    }));
   };
 
   const deleteNote = async (id: string) => {
@@ -560,10 +600,10 @@ Would you like to try a practice substrate together to test this rule?`,
     if (!userId || !db) return;
     const note = notes.find((n) => n.id === id);
     if (!note) return;
-    await updateDoc(doc(db, "notes", id), {
+    await updateDoc(doc(db, "notes", id), cleanFirestoreData({
       isFavorite: !note.isFavorite,
       updatedAt: Date.now(),
-    });
+    }));
   };
 
   // Quiz Actions
@@ -578,7 +618,7 @@ Would you like to try a practice substrate together to test this rule?`,
       createdAt: Date.now(),
     };
 
-    await setDoc(doc(db, "quizzes", quizId), newQuiz);
+    await setDoc(doc(db, "quizzes", quizId), cleanFirestoreData(newQuiz));
     return newQuiz;
   };
 
@@ -593,7 +633,7 @@ Would you like to try a practice substrate together to test this rule?`,
       completedAt: Date.now(),
     };
 
-    await setDoc(doc(db, "quizResults", resultId), newResult);
+    await setDoc(doc(db, "quizResults", resultId), cleanFirestoreData(newResult));
     return newResult;
   };
 
@@ -605,32 +645,39 @@ Would you like to try a practice substrate together to test this rule?`,
   // Chat Actions
   const activeSession = chatSessions.find((s) => s.id === activeSessionId) || chatSessions[0] || null;
 
-  const createChatSession = async (subject: string, academicLevel: string, firstMessage?: string): Promise<ChatSession> => {
+  const createChatSession = async (
+    subject: string,
+    academicLevel: string,
+    sessionTitle?: string
+  ): Promise<ChatSession> => {
     if (!userId || !db) throw new Error("Please sign in to start a study chat.");
 
     const sessionId = `chat_${Date.now()}`;
+    const safeTitle = sessionTitle && typeof sessionTitle === "string" && sessionTitle.trim()
+      ? (sessionTitle.trim().length > 36 ? sessionTitle.trim().slice(0, 36) + "..." : sessionTitle.trim())
+      : `${subject || "General"} Study Session`;
+
     const newSession: ChatSession = {
       id: sessionId,
       userId,
-      title: firstMessage ? firstMessage.slice(0, 36) + "..." : `${subject || "General"} Study Session`,
+      title: safeTitle,
       subject: subject || "General",
       academicLevel: academicLevel || "College / University",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      messages: firstMessage
-        ? [
-            {
-              id: `msg_${Date.now()}`,
-              role: "user",
-              content: firstMessage,
-              timestamp: Date.now(),
-            },
-          ]
-        : [],
+      messages: [],
     };
 
-    await setDoc(doc(db, "chatSessions", sessionId), newSession);
+    // Optimistically update React state immediately
+    setChatSessions((prev) => [newSession, ...prev.filter((s) => s.id !== sessionId)]);
     setActiveSessionId(sessionId);
+
+    try {
+      await setDoc(doc(db, "chatSessions", sessionId), cleanFirestoreData(newSession));
+    } catch (err) {
+      console.error(`[Firestore Error] Failed to create chatSessions/${sessionId}:`, err);
+    }
+
     return newSession;
   };
 
@@ -638,24 +685,101 @@ Would you like to try a practice substrate together to test this rule?`,
     setActiveSessionId(sessionId);
   };
 
-  const addMessageToActiveSession = async (message: Omit<ChatMessage, "id" | "timestamp">) => {
-    if (!userId || !db || !activeSession) return;
+  const addMessageToActiveSession = async (
+    message: Omit<ChatMessage, "id" | "timestamp">,
+    targetSessionId?: string
+  ) => {
+    if (!userId || !db) return;
+
+    const sid = targetSessionId || activeSessionId || activeSession?.id || (chatSessions[0]?.id ?? null);
+    if (!sid) return;
+
+    // Strict sanitization of message object - guaranteed no undefined values
     const newMsg: ChatMessage = {
-      ...message,
-      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: typeof message.content === "string" ? message.content : String(message.content || ""),
       timestamp: Date.now(),
     };
-    const updatedMessages = [...activeSession.messages, newMsg];
 
-    await updateDoc(doc(db, "chatSessions", activeSession.id), {
-      messages: updatedMessages,
-      updatedAt: Date.now(),
-    });
+    if (message.subject && typeof message.subject === "string" && message.subject.trim()) {
+      newMsg.subject = message.subject.trim();
+    }
+
+    if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+      const validAtts = message.attachments
+        .filter((att) => att && typeof att === "object")
+        .map((att) => {
+          const item: { name: string; formattedSize: string; category?: string } = {
+            name: String(att.name || "Document"),
+            formattedSize: String(att.formattedSize || "0 KB"),
+          };
+          if (att.category && typeof att.category === "string") {
+            item.category = att.category;
+          }
+          return item;
+        });
+      if (validAtts.length > 0) {
+        newMsg.attachments = validAtts;
+      }
+    }
+
+    const cleanedMsg = cleanFirestoreData(newMsg);
+
+    // 1. Optimistically update local React state using functional updater (never stale)
+    setChatSessions((prev) =>
+      prev.map((s) => {
+        if (s.id === sid) {
+          const currentMsgs = Array.isArray(s.messages) ? s.messages : [];
+          return {
+            ...s,
+            messages: [...currentMsgs, newMsg],
+            updatedAt: Date.now(),
+          };
+        }
+        return s;
+      })
+    );
+
+    // 2. Persist to Firestore atomically using arrayUnion
+    try {
+      const docRef = doc(db, "chatSessions", sid);
+      await updateDoc(docRef, {
+        messages: arrayUnion(cleanedMsg),
+        updatedAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error(`[Firestore Error] Failed to update chatSessions/${sid}:`, err);
+      // Fallback: If updateDoc fails because document does not exist, use setDoc
+      if (err?.code === "not-found") {
+        try {
+          await setDoc(
+            doc(db, "chatSessions", sid),
+            cleanFirestoreData({
+              id: sid,
+              userId,
+              title: "Study Session",
+              subject: "General",
+              academicLevel: "College / University",
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              messages: [cleanedMsg],
+            })
+          );
+        } catch (setErr) {
+          console.error("Fallback setDoc error:", setErr);
+        }
+      }
+    }
   };
 
   const deleteChatSession = async (sessionId: string) => {
     if (!userId || !db) return;
-    await deleteDoc(doc(db, "chatSessions", sessionId));
+    try {
+      await deleteDoc(doc(db, "chatSessions", sessionId));
+    } catch (err) {
+      console.error(`[Firestore Error] Failed to delete chatSessions/${sessionId}:`, err);
+    }
     if (activeSessionId === sessionId) {
       const remaining = chatSessions.filter((s) => s.id !== sessionId);
       setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
@@ -664,10 +788,17 @@ Would you like to try a practice substrate together to test this rule?`,
 
   const clearChatSession = async (sessionId: string) => {
     if (!userId || !db) return;
-    await updateDoc(doc(db, "chatSessions", sessionId), {
-      messages: [],
-      updatedAt: Date.now(),
-    });
+    setChatSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, messages: [], updatedAt: Date.now() } : s))
+    );
+    try {
+      await updateDoc(doc(db, "chatSessions", sessionId), cleanFirestoreData({
+        messages: [],
+        updatedAt: Date.now(),
+      }));
+    } catch (err) {
+      console.error(`[Firestore Error] Failed to clear chatSessions/${sessionId}:`, err);
+    }
   };
 
   // Calculated Aggregate Stats
@@ -716,6 +847,7 @@ Would you like to try a practice substrate together to test this rule?`,
         setActivePlan,
         toggleTaskCompletion,
         deleteStudyPlan,
+        deleteAllStudyPlans,
         notes,
         saveNote,
         updateNote,

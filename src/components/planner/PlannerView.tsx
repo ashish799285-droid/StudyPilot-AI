@@ -36,6 +36,7 @@ export const PlannerView: React.FC = () => {
     setActivePlan,
     toggleTaskCompletion,
     deleteStudyPlan,
+    deleteAllStudyPlans,
   } = useData();
   const { recordStudySession } = useAuth();
 
@@ -43,6 +44,12 @@ export const PlannerView: React.FC = () => {
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Deletion Confirmation States
+  const [planToDelete, setPlanToDelete] = useState<StudyPlan | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Refine / Edit AI Plan State
   const [refineInstruction, setRefineInstruction] = useState("");
@@ -60,6 +67,50 @@ export const PlannerView: React.FC = () => {
   const [studyPace, setStudyPace] = useState("Balanced (Deep Focus & Active Recall)");
   const [targetScore, setTargetScore] = useState("Grade A / 90%+");
   const [additionalNotes, setAdditionalNotes] = useState("Prioritize memorizing reaction mechanisms and tree traversal proofs.");
+
+  const getPlanProgress = (plan: StudyPlan) => {
+    let total = 0;
+    let done = 0;
+    plan.weeklyMilestones?.forEach((w) => {
+      w.days?.forEach((d) => {
+        d.tasks?.forEach((t) => {
+          total++;
+          if (t.completed) done++;
+        });
+      });
+    });
+    const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    return { total, done, percent };
+  };
+
+  const handleConfirmDeleteSingle = async () => {
+    if (!planToDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteStudyPlan(planToDelete.id);
+      setPlanToDelete(null);
+    } catch (err: any) {
+      console.error("Failed to delete study plan:", err);
+      setDeleteError("Failed to delete study plan. Please try again.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleConfirmDeleteAll = async () => {
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAllStudyPlans();
+      setShowDeleteAllConfirm(false);
+    } catch (err: any) {
+      console.error("Failed to delete all study plans:", err);
+      setDeleteError("Failed to delete all study plans. Please try again.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleGeneratePlan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -208,7 +259,7 @@ export const PlannerView: React.FC = () => {
         <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50/70 via-white to-purple-50/40 p-5 sm:p-6 shadow-xs">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
                   Active Plan
                 </span>
@@ -225,42 +276,55 @@ export const PlannerView: React.FC = () => {
               <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">{activePlan.summary}</p>
             </div>
 
-            {/* Overall Progress Indicator */}
-            <div className="flex items-center gap-4 rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-2xs">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs gap-4">
-                  <span className="font-semibold text-slate-700">Completion</span>
-                  <span className="font-bold text-indigo-600">{progressPercent}%</span>
+            {/* Overall Progress Indicator & Delete button */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-4 rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-2xs">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs gap-4">
+                    <span className="font-semibold text-slate-700">Completion</span>
+                    <span className="font-bold text-indigo-600">{progressPercent}%</span>
+                  </div>
+                  <div className="h-2 w-32 rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-600 transition-all duration-300"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    {completedTasks} of {totalTasks} tasks finished
+                  </p>
                 </div>
-                <div className="h-2 w-32 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-600 transition-all duration-300"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-                <p className="text-[10px] text-slate-400">
-                  {completedTasks} of {totalTasks} tasks finished
-                </p>
               </div>
+
+              <button
+                type="button"
+                id={`planner-btn-delete-active-${activePlan.id}`}
+                onClick={() => setPlanToDelete(activePlan)}
+                className="flex items-center justify-center rounded-xl border border-slate-200 bg-white p-3 text-slate-400 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 shadow-2xs transition"
+                title="Delete this study plan"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-xs">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-            <CalendarDays className="h-6 w-6" />
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 text-2xl">
+            📚
           </div>
-          <h3 className="mt-4 text-base font-bold text-slate-900">No Study Plan Active</h3>
+          <h3 className="mt-4 text-base font-bold text-slate-900">Your study planner is clear. 📚</h3>
           <p className="mt-1 text-xs text-slate-500 max-w-sm">
-            Generate an AI-optimized schedule with daily study tasks tailored to your exam timeline.
+            Create a study plan whenever you're ready.
           </p>
           <button
             type="button"
+            id="planner-btn-create-first"
             onClick={() => setShowCreateModal(true)}
-            className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700"
+            className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition"
           >
             <Sparkles className="h-4 w-4" />
-            <span>Create Your Study Plan</span>
+            <span>Create a Study Plan</span>
           </button>
         </div>
       )}
@@ -546,7 +610,292 @@ export const PlannerView: React.FC = () => {
         </div>
       )}
 
-      {/* Plan Generation Modal */}
+      {/* Saved / Previous Study Plans Section */}
+      {studyPlans.length > 0 && (
+        <div className="space-y-4 pt-6 border-t border-slate-200">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-slate-900 text-base">Saved Study Plans</h3>
+                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
+                  {studyPlans.length} {studyPlans.length === 1 ? "Plan" : "Plans"}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Switch between your active roadmap and previously saved study plans, export PDFs, or manage plans.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              id="planner-btn-delete-all-plans"
+              onClick={() => setShowDeleteAllConfirm(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50/50 shadow-2xs transition self-start sm:self-center"
+              title="Delete all saved study plans"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Delete All Plans</span>
+            </button>
+          </div>
+
+          {/* Saved Plans Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {studyPlans.map((plan) => {
+              const { total, done, percent } = getPlanProgress(plan);
+              const isCurrentActive = activePlan?.id === plan.id;
+
+              return (
+                <div
+                  key={plan.id}
+                  className={`relative rounded-2xl border p-4 shadow-xs transition flex flex-col justify-between ${
+                    isCurrentActive
+                      ? "border-indigo-300 bg-gradient-to-br from-indigo-50/40 via-white to-purple-50/20 ring-1 ring-indigo-200"
+                      : "border-slate-200 bg-white hover:border-slate-300"
+                  }`}
+                >
+                  <div>
+                    {/* Header Row */}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {isCurrentActive ? (
+                          <span className="rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
+                            Active Roadmap
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                            Saved Plan
+                          </span>
+                        )}
+                        <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">
+                          {plan.examDate || "No Deadline"}
+                        </span>
+                      </div>
+
+                      {/* Individual Delete Button */}
+                      <button
+                        type="button"
+                        id={`planner-btn-delete-plan-${plan.id}`}
+                        onClick={() => setPlanToDelete(plan)}
+                        className="rounded-lg p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                        title="Delete this study plan"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Plan Title */}
+                    <h4 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">
+                      {plan.title}
+                    </h4>
+
+                    {/* Metadata */}
+                    <div className="mt-2.5 space-y-1 text-xs text-slate-500">
+                      {plan.examName && (
+                        <div className="flex items-center gap-1.5 text-[11px]">
+                          <span className="text-slate-400">Target:</span>
+                          <span className="font-medium text-slate-700 truncate">{plan.examName}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="text-slate-400">Created:</span>
+                        <span className="font-medium text-slate-600">
+                          {new Date(plan.createdAt || Date.now()).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="mt-3 pt-2.5 border-t border-slate-100">
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <span className="text-slate-500 font-medium">Task Progress</span>
+                        <span className="font-bold text-slate-700">
+                          {done}/{total} ({percent}%)
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-600 rounded-full transition-all duration-300"
+                          style={{ width: `${percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="mt-4 flex items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
+                    <button
+                      type="button"
+                      id={`planner-btn-export-card-${plan.id}`}
+                      onClick={() => {
+                        try {
+                          exportStudyPlanAsPdf(plan);
+                        } catch (err) {
+                          console.error("PDF export failed:", err);
+                          setError("Failed to export PDF plan.");
+                        }
+                      }}
+                      className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition"
+                      title="Export this study plan as PDF"
+                    >
+                      <Download className="h-3 w-3 text-indigo-600" />
+                      <span>Export PDF</span>
+                    </button>
+
+                    {!isCurrentActive ? (
+                      <button
+                        type="button"
+                        id={`planner-btn-activate-${plan.id}`}
+                        onClick={() => {
+                          setActivePlan(plan.id);
+                          setSelectedWeek(1);
+                          setLastChangeSummary(null);
+                        }}
+                        className="flex items-center gap-1 rounded-lg bg-indigo-50 px-3 py-1.5 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 transition"
+                      >
+                        <span>View Plan</span>
+                        <ArrowRight className="h-3 w-3" />
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-bold text-indigo-600 flex items-center gap-1 px-2 py-1">
+                        <Check className="h-3 w-3" />
+                        <span>Active View</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Single Study Plan Delete Confirmation Modal */}
+      {planToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-slate-900">Delete this study plan?</h4>
+                <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">
+                  {planToDelete.title}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-3.5 text-xs text-slate-600 leading-relaxed">
+              This study plan will be permanently removed from your saved plans.
+            </p>
+
+            {deleteError && (
+              <div className="mt-3 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="mt-6 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setPlanToDelete(null);
+                  setDeleteError(null);
+                }}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="planner-btn-confirm-delete-single"
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteSingle}
+                className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-4.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50 transition"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete Plan</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Study Plans Confirmation Modal */}
+      {showDeleteAllConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-slate-900">Delete all study plans?</h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {studyPlans.length} saved {studyPlans.length === 1 ? "plan" : "plans"}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-3.5 text-xs text-slate-600 leading-relaxed">
+              This will permanently remove all of your saved study plans. This action cannot be undone.
+            </p>
+
+            {deleteError && (
+              <div className="mt-3 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="mt-6 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setShowDeleteAllConfirm(false);
+                  setDeleteError(null);
+                }}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="planner-btn-confirm-delete-all"
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteAll}
+                className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-4.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50 transition"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    <span>Deleting All...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete All Plans</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
           <div className="relative w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">

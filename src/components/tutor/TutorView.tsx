@@ -54,10 +54,14 @@ export const TutorView: React.FC<TutorViewProps> = ({
 
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState(initialSubject || "General");
   const [academicLevel, setAcademicLevel] = useState("Undergraduate");
   const [tutorTone, setTutorTone] = useState("Encouraging & Socratic");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+  // In-flight request ID ref to safely discard responses if chat is cleared while generating
+  const activeRequestIdRef = useRef<number>(0);
 
   // Document Upload States
   const [attachments, setAttachments] = useState<AttachedDocument[]>([]);
@@ -159,11 +163,11 @@ export const TutorView: React.FC<TutorViewProps> = ({
       ? `Please analyze the attached study ${readyAttachments.length === 1 ? "document" : "documents"} and provide key takeaways, concepts, and a study summary.`
       : "");
 
-    // Prepare attachment metadata for session history
+    // Prepare clean attachment metadata for session history
     const attachmentMetadata = readyAttachments.map((a) => ({
-      name: a.name,
-      formattedSize: a.formattedSize,
-      category: a.category,
+      name: a.name || "Document",
+      formattedSize: a.formattedSize || "0 KB",
+      category: a.category || "other",
     }));
 
     // Ensure we have an active session
@@ -174,15 +178,20 @@ export const TutorView: React.FC<TutorViewProps> = ({
         academicLevel,
         readyAttachments.length > 0
           ? `Study Session: ${readyAttachments[0].name}`
-          : messageText
+          : (messageText.length > 36 ? messageText.slice(0, 36) + "..." : messageText)
       );
     }
 
-    await addMessageToActiveSession({
-      role: "user",
-      content: messageText,
-      attachments: attachmentMetadata.length > 0 ? attachmentMetadata : undefined,
-    });
+    const sessionId = currentSession.id;
+
+    await addMessageToActiveSession(
+      {
+        role: "user",
+        content: messageText,
+        ...(attachmentMetadata.length > 0 ? { attachments: attachmentMetadata } : {}),
+      },
+      sessionId
+    );
 
     // Prepare API attachment payload
     const apiAttachments: ChatAttachmentPayload[] = readyAttachments.map((a) => ({
@@ -199,12 +208,14 @@ export const TutorView: React.FC<TutorViewProps> = ({
     setAttachments([]);
     setLoading(true);
 
+    const reqId = ++activeRequestIdRef.current;
+
     try {
-      // Build messages history payload
+      // Build messages history payload from previous messages
       const history = [
         ...(currentSession?.messages || []).map((m) => ({
           role: m.role,
-          content: m.content,
+          content: m.content || "",
         })),
         { role: "user" as const, content: messageText },
       ];
@@ -217,21 +228,52 @@ export const TutorView: React.FC<TutorViewProps> = ({
         apiAttachments
       );
 
-      await addMessageToActiveSession({
-        role: "assistant",
-        content: reply,
-      });
+      // Discard reply if user cleared the chat or started another request during generation
+      if (activeRequestIdRef.current !== reqId) return;
+
+      await addMessageToActiveSession(
+        {
+          role: "assistant",
+          content: reply,
+        },
+        sessionId
+      );
 
       // Award study minutes for engagement
       await recordStudySession(5);
     } catch (err: any) {
+      if (activeRequestIdRef.current !== reqId) return;
       console.error("AI Tutor chat error:", err);
-      await addMessageToActiveSession({
-        role: "assistant",
-        content: `⚠️ ${err.message || "Gemini is experiencing unusually high demand right now. Please try again in a moment."}`,
-      });
+      try {
+        await addMessageToActiveSession(
+          {
+            role: "assistant",
+            content: `⚠️ ${err?.message || "Gemini is experiencing unusually high demand right now. Please try again in a moment."}`,
+          },
+          sessionId
+        );
+      } catch (saveErr) {
+        console.error("Failed to save error response to session:", saveErr);
+      }
     } finally {
-      setLoading(false);
+      if (activeRequestIdRef.current === reqId) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleConfirmClearChat = async () => {
+    if (!activeSession) return;
+    // Abort/ignore any in-flight AI generation response
+    activeRequestIdRef.current++;
+    setLoading(false);
+    setShowClearConfirm(false);
+    setAttachments([]);
+
+    try {
+      await clearChatSession(activeSession.id);
+    } catch (err) {
+      console.error("Failed to clear chat session:", err);
     }
   };
 
@@ -434,13 +476,16 @@ export const TutorView: React.FC<TutorViewProps> = ({
 
             <button
               type="button"
-              onClick={() => activeSession && clearChatSession(activeSession.id)}
+              id="tutor-btn-clear-chat"
+              onClick={() => setShowClearConfirm(true)}
+              disabled={!activeSession || !activeSession.messages || activeSession.messages.length === 0}
               title="Clear messages in this chat"
-              className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-slate-600 disabled:hover:border-slate-200 disabled:cursor-not-allowed"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Clear</span>
+              <Trash2 className="h-3.5 w-3.5 text-slate-400" />
+              <span>Clear Chat</span>
             </button>
+
             <button
               type="button"
               onClick={() => createChatSession(selectedSubject, academicLevel)}
@@ -460,10 +505,10 @@ export const TutorView: React.FC<TutorViewProps> = ({
                 <Sparkles className="h-7 w-7" />
               </div>
               <h2 className="mt-4 text-lg font-bold text-slate-900">
-                What would you like to master today?
+                Ready for a fresh topic? 📚
               </h2>
               <p className="mt-1 text-xs text-slate-500 max-w-md">
-                Ask questions, paste homework problems, or attach your study documents (PDF, DOCX, PPTX, XLSX, Notes, Images) for AI tutoring.
+                Ask anything about your studies, upload a document, or start a new question.
               </p>
 
               {/* Upload Drop Callout */}
@@ -650,6 +695,47 @@ export const TutorView: React.FC<TutorViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Clear Chat Confirmation Modal */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600 border border-rose-100">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Clear this conversation?
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 leading-relaxed">
+                  Your messages and AI responses in this chat will be removed. This cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                id="btn-cancel-clear-chat"
+                onClick={() => setShowClearConfirm(false)}
+                className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-clear-chat"
+                onClick={handleConfirmClearChat}
+                className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 shadow-xs transition"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Clear Chat</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
