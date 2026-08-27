@@ -20,16 +20,36 @@ import {
   ArrowRight,
   TrendingUp,
   BookOpen,
+  Wand2,
+  RefreshCw,
+  Sliders,
+  Check,
+  AlertCircle,
 } from "lucide-react";
 
 export const PlannerView: React.FC = () => {
-  const { studyPlans, activePlan, saveStudyPlan, setActivePlan, toggleTaskCompletion, deleteStudyPlan } = useData();
+  const {
+    studyPlans,
+    activePlan,
+    saveStudyPlan,
+    updateStudyPlan,
+    setActivePlan,
+    toggleTaskCompletion,
+    deleteStudyPlan,
+  } = useData();
   const { recordStudySession } = useAuth();
 
   const [showCreateModal, setShowCreateModal] = useState(studyPlans.length === 0);
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Refine / Edit AI Plan State
+  const [refineInstruction, setRefineInstruction] = useState("");
+  const [refineLoading, setRefineLoading] = useState(false);
+  const [refineError, setRefineError] = useState<string | null>(null);
+  const [lastChangeSummary, setLastChangeSummary] = useState<string[] | null>(null);
+  const [refineSuccess, setRefineSuccess] = useState<string | null>(null);
 
   // Form State
   const [examName, setExamName] = useState("Final Examinations");
@@ -68,9 +88,11 @@ export const PlannerView: React.FC = () => {
         additionalNotes,
       });
 
-      const saved = await saveStudyPlan(generated);
+      await saveStudyPlan(generated);
       setShowCreateModal(false);
       setSelectedWeek(1);
+      setLastChangeSummary(null);
+      setRefineSuccess(null);
     } catch (err: any) {
       console.error("Failed to generate plan:", err);
       setError(err.message || "Failed to generate study plan. Please try again.");
@@ -78,6 +100,40 @@ export const PlannerView: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const handleRefinePlan = async (instructionToUse?: string) => {
+    const instruction = (instructionToUse || refineInstruction).trim();
+    if (!instruction || !activePlan || refineLoading) return;
+
+    setRefineLoading(true);
+    setRefineError(null);
+    setRefineSuccess(null);
+
+    try {
+      const result = await api.refineStudyPlan({
+        currentPlan: activePlan,
+        instruction,
+      });
+
+      await updateStudyPlan(activePlan.id, result.plan);
+      setLastChangeSummary(result.changeSummary || ["Plan adjusted based on your request"]);
+      setRefineSuccess("Study plan successfully adjusted and synchronized!");
+      setRefineInstruction("");
+    } catch (err: any) {
+      console.error("Failed to refine plan:", err);
+      setRefineError(err.message || "Failed to adjust study plan. Please try again with different instructions.");
+    } finally {
+      setRefineLoading(false);
+    }
+  };
+
+  const refinePresets = [
+    { label: "Add 45m Weekend Review", instruction: "Add 45 minutes of active recall review sessions on Saturdays and Sundays." },
+    { label: "Give More Focus to Hard Topics", instruction: "Increase daily focus time on the most challenging subjects and include practice problems." },
+    { label: "Insert Mock Exam on Final Week", instruction: "Schedule a comprehensive timed mock exam 2 days before the target date." },
+    { label: "Lighten Weekday Load (-30m)", instruction: "Rebalance the schedule so weekdays have 30 minutes less study time and move light review to weekends." },
+    { label: "Add Active Recall & Flashcards", instruction: "Add daily 20-minute flashcard and active recall slots at the end of each study day." },
+  ];
 
   const currentWeekData = activePlan?.weeklyMilestones.find((w) => w.weekNumber === selectedWeek) || activePlan?.weeklyMilestones[0];
 
@@ -114,11 +170,11 @@ export const PlannerView: React.FC = () => {
               AI Study Planner
             </h1>
             <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
-              Personalized
+              Adaptive
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Intelligent scheduling powered by Gemini adapting to your exam timeline and target scores.
+            Intelligent roadmap generated and refined by Gemini, adapting to your pace, topics, and exam schedule.
           </p>
         </div>
 
@@ -139,7 +195,7 @@ export const PlannerView: React.FC = () => {
             type="button"
             id="planner-btn-new-plan"
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700"
+            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition"
           >
             <Sparkles className="h-3.5 w-3.5" />
             <span>Generate New Plan</span>
@@ -159,6 +215,11 @@ export const PlannerView: React.FC = () => {
                 <span className="text-xs font-semibold text-slate-500">
                   Target: {activePlan.examDate}
                 </span>
+                {lastChangeSummary && (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                    AI Modified
+                  </span>
+                )}
               </div>
               <h2 className="text-lg font-bold text-slate-900">{activePlan.title}</h2>
               <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">{activePlan.summary}</p>
@@ -178,75 +239,85 @@ export const PlannerView: React.FC = () => {
                   />
                 </div>
                 <p className="text-[10px] text-slate-400">
-                  {completedTasks} of {totalTasks} tasks done
+                  {completedTasks} of {totalTasks} tasks finished
                 </p>
               </div>
             </div>
           </div>
-
-          {/* Week Selector Tabs */}
-          <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-slate-200/80 pt-4">
-            <span className="text-xs font-bold text-slate-500 mr-1">Milestone Weeks:</span>
-            {activePlan.weeklyMilestones.map((week) => (
-              <button
-                key={week.weekNumber}
-                type="button"
-                onClick={() => setSelectedWeek(week.weekNumber)}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
-                  selectedWeek === week.weekNumber
-                    ? "bg-indigo-600 text-white shadow-xs"
-                    : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-200"
-                }`}
-              >
-                <span>Week {week.weekNumber}</span>
-                <span className={`text-[10px] ${selectedWeek === week.weekNumber ? "text-indigo-200" : "text-slate-400"}`}>
-                  ({week.days.length} days)
-                </span>
-              </button>
-            ))}
-          </div>
         </div>
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
-          <CalendarDays className="mx-auto h-12 w-12 text-indigo-400" />
-          <h3 className="mt-3 text-base font-bold text-slate-900">No Study Plan Created Yet</h3>
-          <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
-            Input your subjects, daily study hours, and exam date to have Gemini generate an optimal schedule.
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-xs">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+            <CalendarDays className="h-6 w-6" />
+          </div>
+          <h3 className="mt-4 text-base font-bold text-slate-900">No Study Plan Active</h3>
+          <p className="mt-1 text-xs text-slate-500 max-w-sm">
+            Generate an AI-optimized schedule with daily study tasks tailored to your exam timeline.
           </p>
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="mt-4 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700"
+            className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700"
           >
-            Create Your First Study Plan
+            <Sparkles className="h-4 w-4" />
+            <span>Create Your Study Plan</span>
           </button>
         </div>
       )}
 
-      {/* Week Focus & Daily Schedule Grid */}
-      {currentWeekData && (
+      {/* Main Plan View */}
+      {activePlan && currentWeekData && (
         <div className="space-y-6">
-          {/* Week Theme & Goals */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                <span className="text-xs font-bold uppercase tracking-wider text-indigo-600">
-                  Week {currentWeekData.weekNumber} Theme
-                </span>
-                <h3 className="text-base font-bold text-slate-900 mt-0.5">
-                  {currentWeekData.theme}
-                </h3>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {currentWeekData.focusGoals.map((goal, idx) => (
-                  <span
-                    key={idx}
-                    className="rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700"
+          {/* Week Selector Tabs */}
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              {activePlan.weeklyMilestones.map((week) => {
+                const isSelected = week.weekNumber === selectedWeek;
+                const weekTasks = week.days.flatMap((d) => d.tasks);
+                const weekDone = weekTasks.every((t) => t.completed) && weekTasks.length > 0;
+
+                return (
+                  <button
+                    key={week.weekNumber}
+                    type="button"
+                    onClick={() => setSelectedWeek(week.weekNumber)}
+                    className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+                      isSelected
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200/80"
+                    }`}
                   >
-                    🎯 {goal}
-                  </span>
-                ))}
-              </div>
+                    <span>Week {week.weekNumber}</span>
+                    {weekDone && (
+                      <CheckCircle2 className={`h-3.5 w-3.5 ${isSelected ? "text-indigo-200" : "text-emerald-600"}`} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
+              <span className="font-medium text-slate-700">{currentWeekData.theme}</span>
+            </div>
+          </div>
+
+          {/* Week Focus Goals */}
+          <div className="rounded-xl bg-indigo-50/60 border border-indigo-100/80 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="h-4 w-4 text-indigo-600" />
+              <span className="text-xs font-bold text-indigo-900">
+                Week {currentWeekData.weekNumber} Primary Objective: {currentWeekData.theme}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {currentWeekData.focusGoals.map((goal, gIdx) => (
+                <span
+                  key={gIdx}
+                  className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 border border-indigo-100 shadow-2xs"
+                >
+                  🎯 {goal}
+                </span>
+              ))}
             </div>
           </div>
 
@@ -373,6 +444,105 @@ export const PlannerView: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* 4. Refine / Edit Plan with AI Card */}
+          <div className="rounded-2xl border border-indigo-200/90 bg-gradient-to-b from-indigo-50/40 via-white to-white p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-indigo-100/70 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-xs">
+                  <Wand2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Refine & Adjust Study Plan with AI
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Instruct Gemini to rebalance hours, reschedule topics, or add revision sessions without losing progress.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Change Summary Banner if plan was recently refined */}
+            {lastChangeSummary && lastChangeSummary.length > 0 && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-xs text-emerald-900">
+                <div className="flex items-center gap-1.5 font-bold mb-1.5 text-emerald-800">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <span>Latest AI Adjustments Applied:</span>
+                </div>
+                <ul className="space-y-1 pl-5 list-disc text-[11px] text-emerald-800">
+                  {lastChangeSummary.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {refineError && (
+              <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{refineError}</span>
+              </div>
+            )}
+
+            {/* Quick Adjustment Presets */}
+            <div>
+              <span className="block text-[11px] font-semibold text-slate-600 mb-2">
+                Quick Adjustments:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {refinePresets.map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={refineLoading}
+                    onClick={() => handleRefinePlan(preset.instruction)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-900 transition shadow-2xs disabled:opacity-50"
+                  >
+                    ⚡ {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Instruction Box */}
+            <div className="space-y-2">
+              <div className="relative">
+                <textarea
+                  value={refineInstruction}
+                  onChange={(e) => setRefineInstruction(e.target.value)}
+                  placeholder="e.g., 'I need more time for Organic Chemistry reaction mechanisms on Tuesdays', 'Move Friday study sessions to Saturday', 'Add a 30m active recall quiz at the end of each day'..."
+                  rows={2}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  Gemini will update the schedule while preserving your completed tasks and exam target.
+                </span>
+                <button
+                  type="button"
+                  id="planner-btn-refine"
+                  disabled={!refineInstruction.trim() || refineLoading}
+                  onClick={() => handleRefinePlan()}
+                  className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50 transition"
+                >
+                  {refineLoading ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Optimizing Plan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 className="h-3.5 w-3.5" />
+                      <span>Apply AI Adjustments</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -456,13 +626,13 @@ export const PlannerView: React.FC = () => {
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Subjects & Core Topics (comma separated)
+                  Subjects & Topics (comma separated)
                 </label>
                 <input
                   type="text"
                   value={subjectsInput}
                   onChange={(e) => setSubjectsInput(e.target.value)}
-                  placeholder="e.g. Organic Chemistry, Calculus II, Cell Biology, Microeconomics"
+                  placeholder="e.g. Organic Chemistry, Algorithms, Macroeconomics"
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
                   required
                 />
@@ -471,53 +641,67 @@ export const PlannerView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Difficulty / Intensity
+                    Current Preparation Level
                   </label>
                   <select
                     value={difficultyLevel}
                     onChange={(e) => setDifficultyLevel(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
                   >
-                    <option value="Beginner / Foundation Review">Beginner / Foundation Review</option>
-                    <option value="Intermediate / Challenging">Intermediate / Challenging</option>
-                    <option value="Intensive Exam Crash Course">Intensive Exam Crash Course</option>
-                    <option value="Mastery & Top Tier Score">Mastery & Top Tier Score</option>
+                    <option value="Beginner / Starting from scratch">Beginner / Starting from scratch</option>
+                    <option value="Intermediate / Challenging">Intermediate / Some basics clear</option>
+                    <option value="Advanced Revision / Intensive">Advanced / Final Polish & Practice</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Target Score / Goal
+                    Study Pace Style
                   </label>
-                  <input
-                    type="text"
-                    value={targetScore}
-                    onChange={(e) => setTargetScore(e.target.value)}
-                    placeholder="e.g. Grade A, 95%+, 1500+ SAT"
+                  <select
+                    value={studyPace}
+                    onChange={(e) => setStudyPace(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
-                  />
+                  >
+                    <option value="Balanced (Deep Focus & Active Recall)">Balanced (Concept + Practice)</option>
+                    <option value="Intensive Sprint">Intensive Sprint (High velocity)</option>
+                    <option value="Spaced Repetition Heavy">Spaced Repetition & Flashcards</option>
+                  </select>
                 </div>
               </div>
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Specific Focus or Weak Spots (Optional)
+                  Target Score / Outcome Goal
+                </label>
+                <input
+                  type="text"
+                  value={targetScore}
+                  onChange={(e) => setTargetScore(e.target.value)}
+                  placeholder="e.g. Grade A, 95%+, Pass with Distinction, 520+ MCAT"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Specific Focus Areas or Weak Topics
                 </label>
                 <textarea
                   value={additionalNotes}
                   onChange={(e) => setAdditionalNotes(e.target.value)}
-                  placeholder="e.g. Focus extra time on reaction mechanisms, weak at dynamic programming, need flashcards..."
+                  placeholder="e.g. Need more practice on SN1/SN2 mechanisms and dynamic programming."
                   rows={2}
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-hidden"
                 />
               </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 {studyPlans.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setShowCreateModal(false)}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    className="rounded-xl border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:bg-slate-50"
                   >
                     Cancel
                   </button>
@@ -525,17 +709,17 @@ export const PlannerView: React.FC = () => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 font-bold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50"
                 >
                   {loading ? (
                     <>
                       <Sparkles className="h-4 w-4 animate-spin" />
-                      <span>Synthesizing Plan with Gemini...</span>
+                      <span>Generating Plan...</span>
                     </>
                   ) : (
                     <>
                       <Sparkles className="h-4 w-4" />
-                      <span>Generate Study Plan</span>
+                      <span>Create Plan</span>
                     </>
                   )}
                 </button>

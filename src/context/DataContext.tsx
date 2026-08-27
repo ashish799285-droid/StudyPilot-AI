@@ -26,6 +26,7 @@ interface DataContextType {
   studyPlans: StudyPlan[];
   activePlan: StudyPlan | null;
   saveStudyPlan: (plan: Omit<StudyPlan, "id" | "userId" | "createdAt" | "active">) => Promise<StudyPlan>;
+  updateStudyPlan: (planId: string, updates: Partial<StudyPlan>) => Promise<void>;
   setActivePlan: (planId: string) => Promise<void>;
   toggleTaskCompletion: (planId: string, weekNumber: number, dayName: string, taskId: string) => Promise<void>;
   deleteStudyPlan: (planId: string) => Promise<void>;
@@ -501,6 +502,14 @@ Would you like to try a practice substrate together to test this rule?`,
     });
   };
 
+  const updateStudyPlan = async (planId: string, updates: Partial<StudyPlan>) => {
+    if (!userId || !db) return;
+    await updateDoc(doc(db, "studyPlans", planId), {
+      ...updates,
+      updatedAt: Date.now(),
+    });
+  };
+
   const deleteStudyPlan = async (planId: string) => {
     if (!userId || !db) return;
     await deleteDoc(doc(db, "studyPlans", planId));
@@ -703,6 +712,7 @@ Would you like to try a practice substrate together to test this rule?`,
         studyPlans,
         activePlan,
         saveStudyPlan,
+        updateStudyPlan,
         setActivePlan,
         toggleTaskCompletion,
         deleteStudyPlan,

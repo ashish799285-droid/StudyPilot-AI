@@ -22,6 +22,11 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   subject?: string;
+  attachments?: {
+    name: string;
+    formattedSize: string;
+    category?: string;
+  }[];
 }
 
 export interface ChatSession {

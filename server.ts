@@ -219,7 +219,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: "10mb" }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   // API Routes
   app.get("/api/health", (req, res) => {
@@ -230,10 +231,16 @@ async function startServer() {
     });
   });
 
-  // 1. AI Study Chat (Conversational Tutor)
+  // 1. AI Study Chat (Conversational Tutor with Document Grounding)
   app.post("/api/gemini/chat", async (req, res) => {
     try {
-      const { messages, academicLevel = "High School / College", subject = "General", tutorTone = "Encouraging & Socratic" } = req.body;
+      const {
+        messages,
+        academicLevel = "High School / College",
+        subject = "General",
+        tutorTone = "Encouraging & Socratic",
+        attachments = [],
+      } = req.body;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "Messages array is required." });
@@ -244,18 +251,55 @@ The student is at the academic level: "${academicLevel}".
 The current subject context is: "${subject}".
 Tutor style/tone: "${tutorTone}".
 
-Your goals:
-1. Explain concepts with crystal clarity, using relatable examples, step-by-step logic, and intuitive analogies.
-2. Adapt vocabulary and depth to the student's level.
-3. If they ask a complex homework question or math problem, provide guided steps, highlight key formulas, and invite them to think through the final steps rather than just giving a dead answer.
-4. Format your responses using clean Markdown with bold keywords, bullet points, numbered steps, code blocks (if relevant), and clear math notations.
-5. If helpful, provide a quick 1-question "Check for Understanding" at the end of key concept explanations.`;
+Your core tutoring guidelines:
+1. DOCUMENT GROUNDING: When study documents (PDFs, Word docs, spreadsheets, slides, text notes, or diagrams/images) are attached by the student, use them as the primary authoritative reference for answering their questions, generating summaries, notes, formulas, step-by-step walkthroughs, or multiple choice questions.
+2. MULTI-DOCUMENT SYNTHESIS: If multiple documents are attached, intelligently cross-reference, compare, and integrate their contents.
+3. CLEAR PEDAGOGY: Explain concepts with crystal clarity, using relatable examples, step-by-step logic, and intuitive analogies.
+4. ADAPTIVE DEPTH: Adapt vocabulary and academic rigor to the student's level (${academicLevel}).
+5. ACTIVE LEARNING: When explaining tricky concepts or problem sets, highlight key formulas and offer a quick 1-question "Check for Understanding" at the end.
+6. RICH MARKDOWN: Format your responses with clean Markdown headers, bold terminology, bullet points, tables, and mathematical formulas.`;
 
       // Convert conversation history to Gemini contents format
-      const contents = messages.map((m: { role: string; content: string }) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
+      const contents = messages.map((m: { role: string; content: string }, index: number) => {
+        const isLastMessage = index === messages.length - 1;
+        const role = m.role === "assistant" ? "model" : "user";
+
+        // For the latest user message, attach multimodal files and document content parts
+        if (isLastMessage && role === "user" && Array.isArray(attachments) && attachments.length > 0) {
+          const parts: any[] = [];
+
+          // 1. Add multimodal attachments (PDFs & Images)
+          for (const att of attachments) {
+            if (att.isMultimodal && att.base64 && att.mimeType) {
+              parts.push({
+                inlineData: {
+                  mimeType: att.mimeType,
+                  data: att.base64,
+                },
+              });
+            }
+          }
+
+          // 2. Add text-based document contents (DOCX, PPTX, XLSX, TXT, RTF, MD, etc.)
+          for (const att of attachments) {
+            if (att.textContent && att.textContent.trim()) {
+              parts.push({
+                text: `--- ATTACHED STUDY DOCUMENT: [${att.name}] ---\n${att.textContent.slice(0, 150000)}\n--- END OF ATTACHED STUDY DOCUMENT: [${att.name}] ---`,
+              });
+            }
+          }
+
+          // 3. Add the user prompt text
+          parts.push({ text: m.content || "Please review the attached study material and provide a detailed overview/answers." });
+
+          return { role, parts };
+        }
+
+        return {
+          role,
+          parts: [{ text: m.content }],
+        };
+      });
 
       const response = await executeGeminiWithFallback(
         (ai, model) =>
@@ -279,6 +323,106 @@ Your goals:
       return res.status(statusCode).json({
         error: friendlyMessage,
       });
+    }
+  });
+
+  // 1.1 Refine / Edit Existing Study Plan
+  app.post("/api/gemini/refine-study-plan", async (req, res) => {
+    try {
+      const { currentPlan, instruction } = req.body;
+
+      if (!currentPlan || !instruction || !instruction.trim()) {
+        return res.status(400).json({ error: "Current plan and modification instruction are required." });
+      }
+
+      const prompt = `You are an expert academic study planner and curriculum architect.
+The student has an EXISTING study plan and wants to adjust/refine it with a specific instruction.
+
+STUDENT MODIFICATION REQUEST:
+"${instruction.trim()}"
+
+CURRENT STUDY PLAN:
+${JSON.stringify(currentPlan, null, 2)}
+
+INSTRUCTIONS FOR ADJUSTMENT:
+1. Make targeted modifications strictly fulfilling the student's request (e.g., adjust hours, rebalance subjects, reschedule days, add revision blocks, insert a mock test, increase/decrease intensity).
+2. PRESERVE the existing plan structure, exam goal (${currentPlan.examName || "Finals"}), target exam date (${currentPlan.examDate || "Upcoming"}), and any existing completed task statuses.
+3. Do NOT discard the entire plan or create an unrelated one. Rebalance the existing days and weekly milestones cleanly.
+4. Provide a bulleted list of 2 to 4 concise change summary items describing what was updated.
+
+Return a strictly valid JSON object ONLY:
+{
+  "changeSummary": [
+    "Increased focus hours for requested subject",
+    "Rebalanced daily study schedule",
+    "Preserved core milestones and completed progress"
+  ],
+  "plan": {
+    "title": "${currentPlan.title || 'Personalized Study Plan'}",
+    "summary": "Updated study strategy reflecting the requested adjustments.",
+    "examName": "${currentPlan.examName || 'Examinations'}",
+    "examDate": "${currentPlan.examDate || 'Upcoming'}",
+    "totalHoursPerWeek": ${currentPlan.totalHoursPerWeek || 21},
+    "weeklyMilestones": [
+      {
+        "weekNumber": 1,
+        "theme": "Week theme",
+        "focusGoals": ["Goal 1", "Goal 2"],
+        "days": [
+          {
+            "dayName": "Monday",
+            "focusSubject": "Subject",
+            "tasks": [
+              {
+                "id": "w1-d1-t1",
+                "title": "Task title",
+                "durationMinutes": 60,
+                "priority": "High",
+                "type": "Concept Learning",
+                "completed": false
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "proTips": [
+      "Updated pro tip 1",
+      "Updated pro tip 2",
+      "Updated pro tip 3"
+    ]
+  }
+}`;
+
+      const response = await executeGeminiWithFallback(
+        (ai, model) =>
+          ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: {
+              temperature: 0.4,
+              responseMimeType: "application/json",
+            },
+          }),
+        "Study Plan Refinement"
+      );
+
+      const raw = response.text || "{}";
+      const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (!parsed || !parsed.plan) {
+        throw new Error("Failed to refine study plan. Please try rephrasing your adjustment request.");
+      }
+
+      return res.json({
+        plan: parsed.plan,
+        changeSummary: parsed.changeSummary || ["Plan updated based on your request"],
+      });
+    } catch (error: any) {
+      console.error("Error in /api/gemini/refine-study-plan:", error);
+      const statusCode = getValidHttpStatusCode(error);
+      const friendlyMessage = formatErrorMessage(error);
+      return res.status(statusCode).json({ error: friendlyMessage });
     }
   });
 

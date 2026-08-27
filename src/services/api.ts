@@ -46,18 +46,28 @@ async function parseJsonResponse<T>(res: Response, endpointLabel: string): Promi
   return data as T;
 }
 
+export interface ChatAttachmentPayload {
+  name: string;
+  category: string;
+  isMultimodal?: boolean;
+  mimeType?: string;
+  base64?: string;
+  textContent?: string;
+}
+
 export const api = {
-  // 1. AI Study Chat
+  // 1. AI Study Chat (with multimodal & document grounding)
   async sendChatMessage(
     messages: { role: "user" | "assistant"; content: string }[],
     academicLevel: string = "High School / College",
     subject: string = "General",
-    tutorTone: string = "Encouraging & Socratic"
+    tutorTone: string = "Encouraging & Socratic",
+    attachments: ChatAttachmentPayload[] = []
   ): Promise<string> {
     const res = await fetch("/api/gemini/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, academicLevel, subject, tutorTone }),
+      body: JSON.stringify({ messages, academicLevel, subject, tutorTone, attachments }),
     });
 
     const data = await parseJsonResponse<{ reply: string }>(res, "AI Tutor Chat (/api/gemini/chat)");
@@ -67,7 +77,26 @@ export const api = {
     return data.reply;
   },
 
-  // 2. AI Study Plan
+  // 1.1 Refine / Edit Existing Study Plan
+  async refineStudyPlan(params: {
+    currentPlan: StudyPlan;
+    instruction: string;
+  }): Promise<{ plan: Omit<StudyPlan, "id" | "userId" | "createdAt" | "active">; changeSummary: string[] }> {
+    const res = await fetch("/api/gemini/refine-study-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+
+    const data = await parseJsonResponse<{
+      plan: Omit<StudyPlan, "id" | "userId" | "createdAt" | "active">;
+      changeSummary: string[];
+    }>(res, "Refine Study Plan (/api/gemini/refine-study-plan)");
+
+    return data;
+  },
+
+  // 2. AI Study Plan Generator
   async generateStudyPlan(params: {
     subjects: string[];
     hoursPerDay: number;
