@@ -1,4 +1,50 @@
-import { ChatMessage, StudyPlan, NoteItem, QuizData, QuizResult } from "../types";
+import { StudyPlan, NoteItem, QuizData } from "../types";
+
+/**
+ * Safely parses response body as JSON, inspecting Content-Type first
+ * to avoid "Unexpected token '<', '<!doctype '... is not valid JSON" errors.
+ */
+async function parseJsonResponse<T>(res: Response, endpointLabel: string): Promise<T> {
+  const contentType = res.headers.get("content-type") || "";
+  const isJson = contentType.toLowerCase().includes("application/json");
+
+  if (!isJson) {
+    const rawText = await res.text().catch(() => "");
+    console.error(
+      `[API Error] ${endpointLabel} returned non-JSON content-type: "${contentType}". Status: ${res.status}. Body preview:`,
+      rawText.slice(0, 300)
+    );
+
+    if (res.status === 503) {
+      throw new Error("Gemini is experiencing unusually high demand right now. Please try again in a moment.");
+    }
+    if (res.status === 429) {
+      throw new Error("The service is receiving too many requests right now. Please wait a moment.");
+    }
+    if (res.status === 404) {
+      throw new Error("API endpoint not found. Please verify the server is running.");
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("Authentication failed for the AI service. Please check your API key configuration.");
+    }
+    throw new Error(`Server returned HTML/unexpected format (Status: ${res.status}). Please try again.`);
+  }
+
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (err: any) {
+    console.error(`[API Error] JSON parse failure for ${endpointLabel}:`, err);
+    throw new Error("Failed to parse AI response. Please try again.");
+  }
+
+  if (!res.ok) {
+    const errorMsg = data?.error || `Request failed with status ${res.status}`;
+    throw new Error(errorMsg);
+  }
+
+  return data as T;
+}
 
 export const api = {
   // 1. AI Study Chat
@@ -14,12 +60,10 @@ export const api = {
       body: JSON.stringify({ messages, academicLevel, subject, tutorTone }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Error ${res.status}: Failed to get AI Tutor response`);
+    const data = await parseJsonResponse<{ reply: string }>(res, "AI Tutor Chat (/api/gemini/chat)");
+    if (!data.reply) {
+      throw new Error("No response was returned from the AI Tutor. Please try asking again.");
     }
-
-    const data = await res.json();
     return data.reply;
   },
 
@@ -40,12 +84,10 @@ export const api = {
       body: JSON.stringify(params),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Error ${res.status}: Failed to generate study plan`);
-    }
-
-    const data = await res.json();
+    const data = await parseJsonResponse<{ plan: Omit<StudyPlan, "id" | "userId" | "createdAt" | "active"> }>(
+      res,
+      "Study Plan (/api/gemini/study-plan)"
+    );
     return data.plan;
   },
 
@@ -66,12 +108,10 @@ export const api = {
       body: JSON.stringify(params),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Error ${res.status}: Failed to generate revision notes`);
-    }
-
-    const data = await res.json();
+    const data = await parseJsonResponse<{ topic: string; subject: string; content: string }>(
+      res,
+      "Notes Generator (/api/gemini/notes)"
+    );
     return data;
   },
 
@@ -90,12 +130,10 @@ export const api = {
       body: JSON.stringify(params),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Error ${res.status}: Failed to generate quiz`);
-    }
-
-    const data = await res.json();
+    const data = await parseJsonResponse<{ quiz: Omit<QuizData, "id" | "userId" | "createdAt"> }>(
+      res,
+      "Quiz Generator (/api/gemini/quiz)"
+    );
     return data.quiz;
   },
 };

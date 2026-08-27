@@ -105,7 +105,7 @@ export const TutorView: React.FC<TutorViewProps> = ({
       console.error("AI Tutor chat error:", err);
       await addMessageToActiveSession({
         role: "assistant",
-        content: `⚠️ **Error connecting to AI Tutor**: ${err.message || "Failed to reach server"}. Please ensure your network is stable and GEMINI_API_KEY is configured.`,
+        content: `⚠️ ${err.message || "Gemini is experiencing unusually high demand right now. Please try again in a moment."}`,
       });
     } finally {
       setLoading(false);
@@ -239,7 +239,7 @@ export const TutorView: React.FC<TutorViewProps> = ({
                   {activeSession?.title || "AI Study Tutor"}
                 </h3>
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200/60">
-                  Gemini Flash
+                  Gemini 3.7 Flash
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">
@@ -289,8 +289,9 @@ export const TutorView: React.FC<TutorViewProps> = ({
                   <button
                     key={i}
                     type="button"
+                    disabled={loading}
                     onClick={() => handleSendMessage(starter.prompt)}
-                    className="flex flex-col rounded-xl border border-slate-200 bg-white p-3 transition hover:border-indigo-300 hover:bg-indigo-50/40 text-left shadow-2xs group"
+                    className="flex flex-col rounded-xl border border-slate-200 bg-white p-3 transition hover:border-indigo-300 hover:bg-indigo-50/40 text-left shadow-2xs group disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <span className="text-xs font-bold text-indigo-700 flex items-center gap-1">
                       <Zap className="h-3 w-3" />
@@ -399,7 +400,7 @@ export const TutorView: React.FC<TutorViewProps> = ({
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400 px-1">
             <span>Press Enter to send, Shift+Enter for new line</span>
-            <span>StudyPilot AI powered by Google Gemini</span>
+            <span>StudyPilot AI • Created by — Mishra Ji</span>
           </div>
         </div>
       </div>

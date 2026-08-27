@@ -105,6 +105,13 @@ export const UnauthenticatedState: React.FC<UnauthenticatedStateProps> = ({ onOp
           </p>
         </div>
       </div>
+
+      {/* Creator Branding */}
+      <div className="mt-12 pt-6 border-t border-slate-200/60 w-full flex items-center justify-center">
+        <p className="text-xs font-medium text-slate-400">
+          Created by — Mishra Ji
+        </p>
+      </div>
     </div>
   );
 };

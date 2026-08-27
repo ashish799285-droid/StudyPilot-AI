@@ -1,98 +1,139 @@
 {
   "entities": {
     "User": {
-      "collectionName": "users",
-      "fields": {
-        "uid": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "avatarUrl": { "type": "string" },
-        "gradeLevel": { "type": "string" },
-        "targetGoal": { "type": "string" },
-        "streakDays": { "type": "number" },
-        "lastStudyDate": { "type": "string" },
-        "totalStudyMinutes": { "type": "number" },
-        "completedTasksCount": { "type": "number" },
-        "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" }
-      }
+      "title": "User",
+      "description": "Student profile, study habits, and streak metrics",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Auth UID" },
+        "name": { "type": "string", "description": "Student display name" },
+        "email": { "type": "string", "description": "Student email address" },
+        "avatarUrl": { "type": "string", "description": "Profile picture URL" },
+        "gradeLevel": { "type": "string", "description": "Academic grade or university level" },
+        "targetGoal": { "type": "string", "description": "Primary academic objective" },
+        "streakDays": { "type": "number", "description": "Current daily consecutive study streak" },
+        "lastStudyDate": { "type": "string", "description": "ISO date string of last active study day" },
+        "totalStudyMinutes": { "type": "number", "description": "Cumulative minutes spent studying" },
+        "completedTasksCount": { "type": "number", "description": "Total study tasks completed" }
+      },
+      "required": ["uid", "name", "email"]
     },
     "StudyPlan": {
-      "collectionName": "studyPlans",
-      "fields": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "title": { "type": "string" },
-        "summary": { "type": "string" },
-        "examName": { "type": "string" },
-        "examDate": { "type": "string" },
-        "totalHoursPerWeek": { "type": "number" },
-        "weeklyMilestones": { "type": "array" },
-        "proTips": { "type": "array" },
-        "active": { "type": "boolean" },
-        "createdAt": { "type": "number" }
-      }
+      "title": "StudyPlan",
+      "description": "Structured revision roadmap with milestones and daily study tasks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique study plan identifier" },
+        "userId": { "type": "string", "description": "Owner student user ID" },
+        "title": { "type": "string", "description": "Plan title" },
+        "summary": { "type": "string", "description": "Overview description" },
+        "examName": { "type": "string", "description": "Target exam or course name" },
+        "examDate": { "type": "string", "description": "Target exam date or deadline" },
+        "totalHoursPerWeek": { "type": "number", "description": "Weekly study budget in hours" },
+        "weeklyMilestones": { "type": "array", "description": "Array of weekly study sprints and daily tasks" },
+        "proTips": { "type": "array", "description": "Cognitive study recommendations" },
+        "active": { "type": "boolean", "description": "Whether this is the primary active plan" },
+        "createdAt": { "type": "number", "description": "Creation timestamp ms" }
+      },
+      "required": ["id", "userId", "title"]
     },
     "Note": {
-      "collectionName": "notes",
-      "fields": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "topic": { "type": "string" },
-        "subject": { "type": "string" },
-        "academicLevel": { "type": "string" },
-        "content": { "type": "string" },
-        "tags": { "type": "array" },
-        "isFavorite": { "type": "boolean" },
-        "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" }
-      }
+      "title": "Note",
+      "description": "Structured academic revision notes and cheat sheets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique note identifier" },
+        "userId": { "type": "string", "description": "Owner student user ID" },
+        "topic": { "type": "string", "description": "Concept topic name" },
+        "subject": { "type": "string", "description": "Academic subject" },
+        "academicLevel": { "type": "string", "description": "Academic depth level" },
+        "content": { "type": "string", "description": "Markdown formatted study content" },
+        "tags": { "type": "array", "description": "Search and filter keywords" },
+        "isFavorite": { "type": "boolean", "description": "Pinned/favorite indicator" },
+        "createdAt": { "type": "number", "description": "Creation timestamp ms" },
+        "updatedAt": { "type": "number", "description": "Last modified timestamp ms" }
+      },
+      "required": ["id", "userId", "topic", "content"]
     },
     "Quiz": {
-      "collectionName": "quizzes",
-      "fields": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "title": { "type": "string" },
-        "subject": { "type": "string" },
-        "topic": { "type": "string" },
-        "difficulty": { "type": "string" },
-        "questions": { "type": "array" },
-        "totalQuestions": { "type": "number" },
-        "createdAt": { "type": "number" }
-      }
+      "title": "Quiz",
+      "description": "Active recall diagnostic quizzes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique quiz identifier" },
+        "userId": { "type": "string", "description": "Owner student user ID" },
+        "title": { "type": "string", "description": "Quiz title" },
+        "subject": { "type": "string", "description": "Academic subject" },
+        "topic": { "type": "string", "description": "Tested topic" },
+        "difficulty": { "type": "string", "description": "Beginner / Intermediate / Advanced" },
+        "questions": { "type": "array", "description": "Array of multiple choice questions" },
+        "totalQuestions": { "type": "number", "description": "Question count" },
+        "createdAt": { "type": "number", "description": "Creation timestamp ms" }
+      },
+      "required": ["id", "userId", "title", "questions"]
     },
     "QuizResult": {
-      "collectionName": "quizResults",
-      "fields": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "quizId": { "type": "string" },
-        "quizTitle": { "type": "string" },
-        "subject": { "type": "string" },
-        "topic": { "type": "string" },
-        "difficulty": { "type": "string" },
-        "score": { "type": "number" },
-        "totalQuestions": { "type": "number" },
-        "percentage": { "type": "number" },
-        "answers": { "type": "array" },
-        "timeSpentSeconds": { "type": "number" },
-        "completedAt": { "type": "number" }
-      }
+      "title": "QuizResult",
+      "description": "Student quiz submission performance and answer telemetry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique result identifier" },
+        "userId": { "type": "string", "description": "Student user ID" },
+        "quizId": { "type": "string", "description": "Tested quiz ID" },
+        "quizTitle": { "type": "string", "description": "Tested quiz title" },
+        "subject": { "type": "string", "description": "Subject" },
+        "topic": { "type": "string", "description": "Topic" },
+        "difficulty": { "type": "string", "description": "Difficulty" },
+        "score": { "type": "number", "description": "Points earned" },
+        "totalQuestions": { "type": "number", "description": "Total question count" },
+        "percentage": { "type": "number", "description": "Percentage score (0-100)" },
+        "answers": { "type": "array", "description": "Selected answers list" },
+        "timeSpentSeconds": { "type": "number", "description": "Elapsed time in seconds" },
+        "completedAt": { "type": "number", "description": "Completion timestamp ms" }
+      },
+      "required": ["id", "userId", "quizId", "score", "totalQuestions"]
     },
     "ChatSession": {
-      "collectionName": "chatSessions",
-      "fields": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "title": { "type": "string" },
-        "subject": { "type": "string" },
-        "academicLevel": { "type": "string" },
-        "messages": { "type": "array" },
-        "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" }
-      }
+      "title": "ChatSession",
+      "description": "Conversational AI study tutor dialogue and message history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique chat session identifier" },
+        "userId": { "type": "string", "description": "Student user ID" },
+        "title": { "type": "string", "description": "Session topic summary" },
+        "subject": { "type": "string", "description": "Subject" },
+        "academicLevel": { "type": "string", "description": "Academic level" },
+        "messages": { "type": "array", "description": "Chronological chat turns" },
+        "createdAt": { "type": "number", "description": "Creation timestamp ms" },
+        "updatedAt": { "type": "number", "description": "Last activity timestamp ms" }
+      },
+      "required": ["id", "userId", "messages"]
     }
   },
-  "firestoreRules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /users/{userId} {\n      allow read, write: if request.auth != null && request.auth.uid == userId;\n    }\n    match /studyPlans/{planId} {\n      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;\n      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;\n    }\n    match /notes/{noteId} {\n      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;\n      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;\n    }\n    match /quizzes/{quizId} {\n      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;\n      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;\n    }\n    match /quizResults/{resultId} {\n      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;\n      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;\n    }\n    match /chatSessions/{sessionId} {\n      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;\n      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;\n    }\n  }\n}"
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents keyed by Auth UID"
+    },
+    "/studyPlans/{planId}": {
+      "schema": "StudyPlan",
+      "description": "User study plan documents"
+    },
+    "/notes/{noteId}": {
+      "schema": "Note",
+      "description": "Revision notes documents"
+    },
+    "/quizzes/{quizId}": {
+      "schema": "Quiz",
+      "description": "Interactive quiz documents"
+    },
+    "/quizResults/{resultId}": {
+      "schema": "QuizResult",
+      "description": "Completed quiz outcome records"
+    },
+    "/chatSessions/{sessionId}": {
+      "schema": "ChatSession",
+      "description": "AI Tutor dialogue session documents"
+    }
+  }
 }

@@ -55,12 +55,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-6 pb-4">
         <div
           onClick={() => handleSelect("dashboard")}
-          className="flex cursor-pointer items-center gap-2.5 mb-6"
+          className="cursor-pointer mb-6"
         >
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-xs">
-            <div className="w-3.5 h-3.5 border-2 border-white rounded-xs"></div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-xs">
+              <div className="w-3.5 h-3.5 border-2 border-white rounded-xs"></div>
+            </div>
+            <span className="text-xl font-black tracking-tighter text-indigo-600">STUDYPILOT</span>
           </div>
-          <span className="text-xl font-black tracking-tighter text-indigo-600">STUDYPILOT</span>
+          <p className="mt-1.5 pl-0.5 text-[11px] font-normal tracking-wide text-slate-400">
+            Created by — <span className="font-semibold text-slate-600">Mishra Ji</span>
+          </p>
         </div>
 
         {/* Section label */}

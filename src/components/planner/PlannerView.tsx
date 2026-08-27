@@ -3,6 +3,7 @@ import { useData } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { StudyPlan, StudyPlanTask } from "../../types";
+import { exportStudyPlanAsPdf } from "../../utils/exportPlannerPdf";
 import {
   CalendarDays,
   Sparkles,
@@ -95,23 +96,12 @@ export const PlannerView: React.FC = () => {
 
   const handleExportPlan = () => {
     if (!activePlan) return;
-    const text = `# ${activePlan.title}\n\nExam: ${activePlan.examName || "Finals"} (${activePlan.examDate})\nHours/Week: ${activePlan.totalHoursPerWeek}h\n\nSummary:\n${activePlan.summary}\n\n` +
-      activePlan.weeklyMilestones.map((w) => (
-        `## Week ${w.weekNumber}: ${w.theme}\nGoals: ${w.focusGoals.join(", ")}\n\n` +
-        w.days.map((d) => (
-          `### ${d.dayName} (${d.focusSubject})\n` +
-          d.tasks.map((t) => `- [${t.completed ? "x" : " "}] ${t.title} (${t.durationMinutes}m, ${t.priority} Priority)`).join("\n")
-        )).join("\n\n")
-      )).join("\n\n---\n\n") +
-      `\n\nPro Tips:\n` + activePlan.proTips.map((tip) => `- ${tip}`).join("\n");
-
-    const blob = new Blob([text], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${activePlan.title.toLowerCase().replace(/\s+/g, "_")}_schedule.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      exportStudyPlanAsPdf(activePlan);
+    } catch (err) {
+      console.error("Failed to export PDF plan:", err);
+      setError("Failed to export PDF study plan. Please try again.");
+    }
   };
 
   return (
@@ -136,11 +126,12 @@ export const PlannerView: React.FC = () => {
           {activePlan && (
             <button
               type="button"
+              id="planner-btn-export-pdf"
               onClick={handleExportPlan}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs"
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 shadow-xs transition"
             >
-              <Download className="h-3.5 w-3.5" />
-              <span>Export Plan</span>
+              <Download className="h-3.5 w-3.5 text-indigo-600" />
+              <span>Export as PDF</span>
             </button>
           )}
 
