@@ -1,9 +1,12 @@
 import React, { useState } from "react";
 import { useData } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
+import { useTimer } from "../../context/TimerContext";
 import { api } from "../../services/api";
 import { StudyPlan, StudyPlanTask } from "../../types";
 import { exportStudyPlanAsPdf } from "../../utils/exportPlannerPdf";
+import { StudyPilotEnvironment } from "../common/StudyPilotEnvironment";
+import { PlannerEmptyState } from "./PlannerEmptyState";
 import {
   CalendarDays,
   Sparkles,
@@ -25,9 +28,15 @@ import {
   Sliders,
   Check,
   AlertCircle,
+  Play,
 } from "lucide-react";
 
-export const PlannerView: React.FC = () => {
+interface PlannerViewProps {
+  onOpenTimer?: () => void;
+  onAskMishraJi?: (prompt: string) => void;
+}
+
+export const PlannerView: React.FC<PlannerViewProps> = ({ onOpenTimer, onAskMishraJi }) => {
   const {
     studyPlans,
     activePlan,
@@ -39,8 +48,9 @@ export const PlannerView: React.FC = () => {
     deleteAllStudyPlans,
   } = useData();
   const { recordStudySession } = useAuth();
+  const { setPendingSetup, startFocusSession, activeSession, timerState } = useTimer();
 
-  const [showCreateModal, setShowCreateModal] = useState(studyPlans.length === 0);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,47 +222,48 @@ export const PlannerView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Header Bar */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-              AI Study Planner
-            </h1>
-            <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
-              Adaptive
-            </span>
+    <StudyPilotEnvironment roomType="command">
+      <div className="space-y-6 pb-12">
+        {/* Header Bar */}
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+                Study Command Room &bull; AI Planner
+              </h1>
+              <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
+                Adaptive
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Intelligent roadmap generated and refined by Gemini, adapting to your pace, topics, and exam schedule.
+            </p>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Intelligent roadmap generated and refined by Gemini, adapting to your pace, topics, and exam schedule.
-          </p>
-        </div>
 
-        <div className="flex items-center gap-2">
-          {activePlan && (
+          <div className="flex items-center gap-2">
+            {activePlan && (
+              <button
+                type="button"
+                id="planner-btn-export-pdf"
+                onClick={handleExportPlan}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 shadow-xs transition"
+              >
+                <Download className="h-3.5 w-3.5 text-indigo-600" />
+                <span>Export as PDF</span>
+              </button>
+            )}
+
             <button
               type="button"
-              id="planner-btn-export-pdf"
-              onClick={handleExportPlan}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 shadow-xs transition"
+              id="planner-btn-new-plan"
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition"
             >
-              <Download className="h-3.5 w-3.5 text-indigo-600" />
-              <span>Export as PDF</span>
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Generate New Plan</span>
             </button>
-          )}
-
-          <button
-            type="button"
-            id="planner-btn-new-plan"
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>Generate New Plan</span>
-          </button>
+          </div>
         </div>
-      </div>
 
       {/* Plan Selection & Summary Banner */}
       {activePlan ? (
@@ -309,24 +320,10 @@ export const PlannerView: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-xs">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 text-2xl">
-            📚
-          </div>
-          <h3 className="mt-4 text-base font-bold text-slate-900">Your study planner is clear. 📚</h3>
-          <p className="mt-1 text-xs text-slate-500 max-w-sm">
-            Create a study plan whenever you're ready.
-          </p>
-          <button
-            type="button"
-            id="planner-btn-create-first"
-            onClick={() => setShowCreateModal(true)}
-            className="mt-5 flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition"
-          >
-            <Sparkles className="h-4 w-4" />
-            <span>Create a Study Plan</span>
-          </button>
-        </div>
+        <PlannerEmptyState
+          onCreatePlan={() => setShowCreateModal(true)}
+          onAskMishraJi={onAskMishraJi || (() => {})}
+        />
       )}
 
       {/* Main Plan View */}
@@ -412,63 +409,127 @@ export const PlannerView: React.FC = () => {
 
                     {/* Task Checklist */}
                     <div className="space-y-2">
-                      {day.tasks.map((task) => (
-                        <div
-                          key={task.id}
-                          onClick={() => {
-                            if (activePlan) {
-                              toggleTaskCompletion(
-                                activePlan.id,
-                                currentWeekData.weekNumber,
-                                day.dayName,
-                                task.id
-                              );
-                              if (!task.completed) {
-                                recordStudySession(task.durationMinutes);
-                              }
-                            }
-                          }}
-                          className={`group flex cursor-pointer items-start gap-2.5 rounded-xl border p-2.5 transition text-xs ${
-                            task.completed
-                              ? "border-emerald-200 bg-emerald-50/50 text-slate-500"
-                              : "border-slate-200/80 bg-slate-50/50 text-slate-800 hover:border-indigo-200 hover:bg-white"
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            className="mt-0.5 shrink-0 text-slate-400 group-hover:text-indigo-600"
-                          >
-                            {task.completed ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-600 fill-emerald-100" />
-                            ) : (
-                              <Circle className="h-4 w-4 text-slate-300 group-hover:text-indigo-500" />
-                            )}
-                          </button>
-                          <div className="flex-1 min-w-0">
-                            <p
-                              className={`font-medium leading-snug ${
-                                task.completed ? "line-through text-slate-400" : ""
-                              }`}
-                            >
-                              {task.title}
-                            </p>
-                            <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-400">
-                              <span>{task.durationMinutes}m</span>
-                              <span>•</span>
-                              <span>{task.type}</span>
-                            </div>
-                          </div>
-                          <span
-                            className={`rounded px-1.5 py-0.2 text-[9px] font-bold shrink-0 ${
-                              task.priority === "High"
-                                ? "bg-rose-50 text-rose-700"
-                                : "bg-slate-100 text-slate-600"
+                      {day.tasks.map((task) => {
+                        const isTaskTimerActive =
+                          activeSession &&
+                          activeSession.taskId === task.id &&
+                          timerState === "running";
+
+                        return (
+                          <div
+                            key={task.id}
+                            className={`group flex items-start gap-2.5 rounded-xl border p-2.5 transition text-xs ${
+                              task.completed
+                                ? "border-emerald-200 bg-emerald-50/50 text-slate-500"
+                                : isTaskTimerActive
+                                ? "border-indigo-300 bg-indigo-50/70 ring-1 ring-indigo-200 text-indigo-950"
+                                : "border-slate-200/80 bg-slate-50/50 text-slate-800 hover:border-indigo-200 hover:bg-white"
                             }`}
                           >
-                            {task.priority}
-                          </span>
-                        </div>
-                      ))}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (activePlan) {
+                                  toggleTaskCompletion(
+                                    activePlan.id,
+                                    currentWeekData.weekNumber,
+                                    day.dayName,
+                                    task.id
+                                  );
+                                  if (!task.completed) {
+                                    recordStudySession(task.durationMinutes);
+                                  }
+                                }
+                              }}
+                              className="mt-0.5 shrink-0 text-slate-400 group-hover:text-indigo-600"
+                              title={task.completed ? "Mark incomplete" : "Mark complete"}
+                            >
+                              {task.completed ? (
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 fill-emerald-100" />
+                              ) : (
+                                <Circle className="h-4 w-4 text-slate-300 group-hover:text-indigo-500" />
+                              )}
+                            </button>
+                            <div
+                              onClick={() => {
+                                if (activePlan) {
+                                  toggleTaskCompletion(
+                                    activePlan.id,
+                                    currentWeekData.weekNumber,
+                                    day.dayName,
+                                    task.id
+                                  );
+                                  if (!task.completed) {
+                                    recordStudySession(task.durationMinutes);
+                                  }
+                                }
+                              }}
+                              className="flex-1 min-w-0 cursor-pointer"
+                            >
+                              <p
+                                className={`font-medium leading-snug ${
+                                  task.completed ? "line-through text-slate-400" : ""
+                                }`}
+                              >
+                                {task.title}
+                              </p>
+                              <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-400">
+                                <span>{task.durationMinutes}m</span>
+                                <span>•</span>
+                                <span>{task.type}</span>
+                                {isTaskTimerActive && (
+                                  <span className="font-bold text-indigo-600 animate-pulse">
+                                    • Focusing Now
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {/* Focus Timer Button */}
+                              {!task.completed && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPendingSetup({
+                                      subject: activePlan?.subject || day.focusSubject || "Study Plan",
+                                      topic: task.title,
+                                      taskTitle: task.title,
+                                      planId: activePlan?.id,
+                                      taskId: task.id,
+                                      taskDurationMinutes: task.durationMinutes,
+                                      priority: task.priority,
+                                    });
+                                    if (onOpenTimer) {
+                                      onOpenTimer();
+                                    }
+                                  }}
+                                  className={`rounded-lg border px-2 py-1 text-[10px] font-bold transition flex items-center gap-1 ${
+                                    isTaskTimerActive
+                                      ? "border-indigo-300 bg-indigo-600 text-white shadow-xs"
+                                      : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-900"
+                                  }`}
+                                  title="Start Focus Timer for this task"
+                                >
+                                  <Clock className="h-3 w-3" />
+                                  <span>{isTaskTimerActive ? "Active" : "Timer"}</span>
+                                </button>
+                              )}
+
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[9px] font-bold shrink-0 ${
+                                  task.priority === "High"
+                                    ? "bg-rose-50 text-rose-700"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                              >
+                                {task.priority}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1077,6 +1138,8 @@ export const PlannerView: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+        {/* End of Planner Inner */}
+      </div>
+    </StudyPilotEnvironment>
   );
 };

@@ -1,17 +1,23 @@
 import React, { useState } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { DataProvider } from "./context/DataContext";
+import { TimerProvider } from "./context/TimerContext";
+import { QuizSessionProvider } from "./context/QuizSessionContext";
+import { EnvironmentProvider } from "./context/EnvironmentContext";
 import { NavigationTab } from "./types";
 import { Header } from "./components/layout/Header";
 import { Sidebar } from "./components/layout/Sidebar";
 import { DashboardView } from "./components/dashboard/DashboardView";
 import { TutorView } from "./components/tutor/TutorView";
 import { PlannerView } from "./components/planner/PlannerView";
+import { TimerView } from "./components/timer/TimerView";
 import { NotesView } from "./components/notes/NotesView";
+import { RevisionView } from "./components/revision/RevisionView";
 import { QuizView } from "./components/quiz/QuizView";
 import { SettingsView } from "./components/settings/SettingsView";
 import { AuthModal } from "./components/auth/AuthModal";
 import { UnauthenticatedState } from "./components/auth/UnauthenticatedState";
+import { LeaveQuizWarningModal } from "./components/quiz/LeaveQuizWarningModal";
 import { Sparkles } from "lucide-react";
 
 function MainContent() {
@@ -21,10 +27,12 @@ function MainContent() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [initialTutorPrompt, setInitialTutorPrompt] = useState<string | undefined>(undefined);
   const [initialTutorSubject, setInitialTutorSubject] = useState<string | undefined>(undefined);
+  const [initialTutorNoteContext, setInitialTutorNoteContext] = useState<any>(undefined);
 
-  const handleLaunchTutor = (prompt: string, subject?: string) => {
+  const handleLaunchTutor = (prompt: string, subject?: string, noteContext?: any) => {
     setInitialTutorPrompt(prompt);
     setInitialTutorSubject(subject);
+    setInitialTutorNoteContext(noteContext);
     setCurrentTab("tutor");
   };
 
@@ -90,14 +98,24 @@ function MainContent() {
                   <TutorView
                     initialPrompt={initialTutorPrompt}
                     initialSubject={initialTutorSubject}
+                    initialNoteContext={initialTutorNoteContext}
                   />
                 )}
 
-                {currentTab === "planner" && <PlannerView />}
+                {currentTab === "planner" && (
+                  <PlannerView
+                    onOpenTimer={() => setCurrentTab("timer")}
+                    onAskMishraJi={handleLaunchTutor}
+                  />
+                )}
 
-                {currentTab === "notes" && <NotesView />}
+                {currentTab === "timer" && <TimerView />}
 
-                {currentTab === "quizzes" && <QuizView />}
+                {currentTab === "notes" && <NotesView onAskMishraJi={handleLaunchTutor} />}
+
+                {currentTab === "revision" && <RevisionView />}
+
+                {currentTab === "quizzes" && <QuizView onAskMishraJi={handleLaunchTutor} />}
 
                 {currentTab === "settings" && <SettingsView />}
               </>
@@ -108,6 +126,9 @@ function MainContent() {
 
       {/* Authentication Modal */}
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+
+      {/* Quiz Integrity Early Leave Warning Modal */}
+      <LeaveQuizWarningModal />
     </div>
   );
 }
@@ -116,7 +137,13 @@ export default function App() {
   return (
     <AuthProvider>
       <DataProvider>
-        <MainContent />
+        <TimerProvider>
+          <QuizSessionProvider>
+            <EnvironmentProvider>
+              <MainContent />
+            </EnvironmentProvider>
+          </QuizSessionProvider>
+        </TimerProvider>
       </DataProvider>
     </AuthProvider>
   );

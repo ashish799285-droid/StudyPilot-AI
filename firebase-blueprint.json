@@ -108,6 +108,63 @@
         "updatedAt": { "type": "number", "description": "Last activity timestamp ms" }
       },
       "required": ["id", "userId", "messages"]
+    },
+    "StudySession": {
+      "title": "StudySession",
+      "description": "Recorded Pomodoro focus sessions and study duration logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique study session log ID" },
+        "userId": { "type": "string", "description": "Student user ID" },
+        "subject": { "type": "string", "description": "Studied subject" },
+        "topic": { "type": "string", "description": "Specific studied topic" },
+        "taskTitle": { "type": "string", "description": "Associated task title" },
+        "planId": { "type": "string", "description": "Optional study plan ID" },
+        "taskId": { "type": "string", "description": "Optional study plan task ID" },
+        "plannedDurationMinutes": { "type": "number", "description": "Planned focus duration in minutes" },
+        "actualDurationMinutes": { "type": "number", "description": "Actual focused time completed in minutes" },
+        "status": { "type": "string", "description": "Completed | Partially completed | Interrupted | Cancelled" },
+        "date": { "type": "string", "description": "Session date (YYYY-MM-DD)" },
+        "startedAt": { "type": "number", "description": "Session start timestamp ms" },
+        "completedAt": { "type": "number", "description": "Session end timestamp ms" },
+        "notes": { "type": "string", "description": "Optional student session notes" }
+      },
+      "required": ["id", "userId", "subject", "topic", "actualDurationMinutes", "status"]
+    },
+    "RevisionCard": {
+      "title": "RevisionCard",
+      "description": "Active recall revision cards with spaced repetition metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique card identifier" },
+        "userId": { "type": "string", "description": "Student owner UID" },
+        "subject": { "type": "string", "description": "Subject name" },
+        "topic": { "type": "string", "description": "Specific concept topic" },
+        "question": { "type": "string", "description": "Front prompt question" },
+        "answer": { "type": "string", "description": "Back answer text" },
+        "explanation": { "type": "string", "description": "Conceptual explanation" },
+        "example": { "type": "string", "description": "Concrete illustrative example" },
+        "keyTakeaway": { "type": "string", "description": "Summary takeaway" },
+        "source": { "type": "object", "description": "Originating source metadata (plan, tutor, quiz, document)" },
+        "difficultyLevel": { "type": "string", "description": "Beginner | Intermediate | Advanced" },
+        "status": { "type": "string", "description": "Needs Review | Developing | Strong | Mastered" },
+        "repetitionIntervalDays": { "type": "number", "description": "Current spaced repetition interval in days" },
+        "easeFactor": { "type": "number", "description": "SM-2 cognitive ease multiplier" },
+        "consecutiveCorrect": { "type": "number", "description": "Streak of successful recall attempts" },
+        "consecutiveIncorrect": { "type": "number", "description": "Count of consecutive failed recalls" },
+        "totalReviews": { "type": "number", "description": "Total recall attempts" },
+        "successfulRecalls": { "type": "number", "description": "Successful recall count" },
+        "incorrectRecalls": { "type": "number", "description": "Incorrect recall count" },
+        "lastReviewedAt": { "type": "number", "description": "Timestamp ms of last review" },
+        "nextReviewDate": { "type": "string", "description": "Scheduled review date (YYYY-MM-DD)" },
+        "nextReviewTimestamp": { "type": "number", "description": "Scheduled review timestamp ms" },
+        "priorityScore": { "type": "number", "description": "Computed queue priority score" },
+        "isHidden": { "type": "boolean", "description": "Whether card is hidden from queue" },
+        "isMastered": { "type": "boolean", "description": "Whether concept is fully mastered" },
+        "createdAt": { "type": "number", "description": "Creation timestamp ms" },
+        "updatedAt": { "type": "number", "description": "Last updated timestamp ms" }
+      },
+      "required": ["id", "userId", "subject", "topic", "question", "answer", "status", "nextReviewDate"]
     }
   },
   "firestore": {
@@ -134,6 +191,14 @@
     "/chatSessions/{sessionId}": {
       "schema": "ChatSession",
       "description": "AI Tutor dialogue session documents"
+    },
+    "/studySessions/{sessionId}": {
+      "schema": "StudySession",
+      "description": "Focus timer and study session logs"
+    },
+    "/revisionCards/{cardId}": {
+      "schema": "RevisionCard",
+      "description": "Spaced repetition revision card documents"
     }
   }
 }

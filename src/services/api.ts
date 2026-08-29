@@ -56,25 +56,54 @@ export interface ChatAttachmentPayload {
 }
 
 export const api = {
-  // 1. AI Study Chat (with multimodal & document grounding)
+  // 1. AI Study Chat (with multimodal, document grounding & revision notes library context)
   async sendChatMessage(
     messages: { role: "user" | "assistant"; content: string }[],
     academicLevel: string = "High School / College",
     subject: string = "General",
     tutorTone: string = "Encouraging & Socratic",
-    attachments: ChatAttachmentPayload[] = []
+    attachments: ChatAttachmentPayload[] = [],
+    studentName?: string,
+    timeOfDay?: "morning" | "afternoon" | "evening" | "night",
+    activeNoteContext?: any,
+    userNotes?: any[]
   ): Promise<string> {
     const res = await fetch("/api/gemini/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, academicLevel, subject, tutorTone, attachments }),
+      body: JSON.stringify({
+        messages,
+        academicLevel,
+        subject,
+        tutorTone,
+        attachments,
+        studentName,
+        timeOfDay,
+        activeNoteContext,
+        userNotes,
+      }),
     });
 
-    const data = await parseJsonResponse<{ reply: string }>(res, "AI Tutor Chat (/api/gemini/chat)");
+    const data = await parseJsonResponse<{ reply: string }>(res, "Mishra Ji AI Tutor Chat (/api/gemini/chat)");
     if (!data.reply) {
-      throw new Error("No response was returned from the AI Tutor. Please try asking again.");
+      throw new Error("No response was returned from Mishra Ji. Please try asking again.");
     }
     return data.reply;
+  },
+
+  // 1.05 Automatic Chat Title Generator
+  async generateChatTitle(userMessage: string, subject: string = "General"): Promise<string> {
+    try {
+      const res = await fetch("/api/gemini/chat-title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userMessage, subject }),
+      });
+      const data = await parseJsonResponse<{ title: string }>(res, "Chat Title (/api/gemini/chat-title)");
+      return data.title || "Study Session";
+    } catch {
+      return userMessage.length > 30 ? userMessage.slice(0, 30) + "..." : userMessage;
+    }
   },
 
   // 1.1 Refine / Edit Existing Study Plan
@@ -144,6 +173,29 @@ export const api = {
     return data;
   },
 
+  // 3.5 AI One-Minute Rapid Revision Generator
+  async generateOneMinuteRevision(params: {
+    quizTitle: string;
+    subject: string;
+    topic: string;
+    difficulty: string;
+    questionsSummary?: string;
+    academicLevel?: string;
+    studentName?: string;
+  }): Promise<{ title: string; topic: string; subject: string; content: string }> {
+    const res = await fetch("/api/gemini/one-minute-revision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+
+    const data = await parseJsonResponse<{ title: string; topic: string; subject: string; content: string }>(
+      res,
+      "One-Minute Revision (/api/gemini/one-minute-revision)"
+    );
+    return data;
+  },
+
   // 4. AI Quiz Generator
   async generateQuiz(params: {
     subject: string;
@@ -164,5 +216,83 @@ export const api = {
       "Quiz Generator (/api/gemini/quiz)"
     );
     return data.quiz;
+  },
+
+  // 5. AI Revision Cards Generator
+  async generateRevisionCards(params: {
+    subject: string;
+    topic: string;
+    contextText?: string;
+    sourceName?: string;
+    sourceType?: "plan" | "tutor" | "document" | "quiz" | "custom" | "notes";
+    customInstructions?: string;
+    existingQuestions?: string[];
+    count?: number;
+  }): Promise<
+    Array<{
+      question: string;
+      answer: string;
+      explanation?: string;
+      example?: string;
+      keyTakeaway?: string;
+      difficultyLevel?: "Beginner" | "Intermediate" | "Advanced";
+    }>
+  > {
+    const res = await fetch("/api/gemini/generate-revision-cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+
+    const data = await parseJsonResponse<{
+      cards: Array<{
+        question: string;
+        answer: string;
+        explanation?: string;
+        example?: string;
+        keyTakeaway?: string;
+        difficultyLevel?: "Beginner" | "Intermediate" | "Advanced";
+      }>;
+    }>(res, "Revision Cards Generator (/api/gemini/generate-revision-cards)");
+
+    return data.cards || [];
+  },
+
+  // 6. Regenerate Single Revision Card
+  async regenerateRevisionCard(params: {
+    card: {
+      subject: string;
+      topic: string;
+      question: string;
+      answer: string;
+    };
+    customInstructions?: string;
+    existingQuestions?: string[];
+  }): Promise<{
+    question: string;
+    answer: string;
+    explanation?: string;
+    example?: string;
+    keyTakeaway?: string;
+    difficultyLevel?: "Beginner" | "Intermediate" | "Advanced";
+  }> {
+    const res = await fetch("/api/gemini/regenerate-revision-card", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+
+    const data = await parseJsonResponse<{
+      card: {
+        question: string;
+        answer: string;
+        explanation?: string;
+        example?: string;
+        keyTakeaway?: string;
+        difficultyLevel?: "Beginner" | "Intermediate" | "Advanced";
+      };
+    }>(res, "Regenerate Revision Card (/api/gemini/regenerate-revision-card)");
+
+    return data.card;
   },
 };

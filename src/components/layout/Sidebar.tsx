@@ -2,15 +2,22 @@ import React from "react";
 import { NavigationTab } from "../../types";
 import { useData } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
+import { useTimer } from "../../context/TimerContext";
+import { useQuizSession } from "../../context/QuizSessionContext";
+import { formatSeconds } from "../../utils/pomodoroEngine";
 import {
   LayoutDashboard,
   BotMessageSquare,
   CalendarDays,
+  Clock,
+  Brain,
   FileText,
   HelpCircle,
   Settings,
   Sparkles,
   TrendingUp,
+  Flame,
+  Lock,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -28,21 +35,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { stats, activePlan } = useData();
   const { user } = useAuth();
+  const { activeSession, timerState, timeRemainingSeconds } = useTimer();
+  const { isQuizActive, requestTabNavigation } = useQuizSession();
 
-  const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }>; badge?: string }[] = [
+  const isTimerActive = activeSession && timerState === "running";
+
+  const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }>; badge?: string; badgeColor?: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "tutor", label: "AI Tutor", icon: BotMessageSquare, badge: "Gemini" },
     { id: "planner", label: "Study Planner", icon: CalendarDays },
+    { id: "timer", label: "Study Timer", icon: Clock, badge: isTimerActive ? formatSeconds(timeRemainingSeconds) : undefined },
+    {
+      id: "revision",
+      label: "Spaced Revision",
+      icon: Brain,
+      badge: stats.dueRevisionCards > 0 ? `${stats.dueRevisionCards} due` : undefined,
+    },
     { id: "notes", label: "Revision Notes", icon: FileText },
-    { id: "quizzes", label: "Quizzes", icon: HelpCircle },
+    {
+      id: "quizzes",
+      label: "Quizzes",
+      icon: HelpCircle,
+      badge: isQuizActive ? "LIVE" : undefined,
+      badgeColor: isQuizActive ? "bg-rose-500 text-white animate-pulse" : undefined,
+    },
     { id: "settings", label: "Profile & Settings", icon: Settings },
   ];
 
   const handleSelect = (tab: NavigationTab) => {
-    setCurrentTab(tab);
-    if (setMobileMenuOpen) {
-      setMobileMenuOpen(false);
-    }
+    requestTabNavigation(tab, () => {
+      setCurrentTab(tab);
+      if (setMobileMenuOpen) {
+        setMobileMenuOpen(false);
+      }
+    });
   };
 
   return (
@@ -99,7 +125,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span>{item.label}</span>
                 </div>
                 {item.badge && (
-                  <span className="rounded-md bg-indigo-100/80 px-1.5 py-0.5 text-[10px] font-black text-indigo-700 uppercase tracking-wider">
+                  <span
+                    className={`rounded-md px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${
+                      item.badgeColor || "bg-indigo-100/80 text-indigo-700"
+                    }`}
+                  >
                     {item.badge}
                   </span>
                 )}

@@ -13,9 +13,10 @@ dotenv.config();
 // Prioritized model chain: default to gemini-3.7-flash with automatic instant fallback to gemini-3.1-flash-lite
 const PRIMARY_MODEL = "gemini-3.7-flash";
 const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const MODEL_PRIORITY_LIST = [PRIMARY_MODEL, FALLBACK_MODEL];
 
-// Dynamic cooldown timestamp to avoid spamming a known-exhausted model
-let primaryModelCooldownUntil = 0;
+// Dynamic cooldown timestamp per model to avoid spamming a model experiencing high demand (503) or rate limits (429)
+const modelCooldowns: Record<string, number> = {};
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -53,9 +54,9 @@ function getValidHttpStatusCode(error: any): number {
     return error.code;
   }
   const msg = (error.message || String(error.status || error)).toLowerCase();
-  if (msg.includes("503") || msg.includes("unavailable") || msg.includes("high demand") || msg.includes("overloaded")) return 503;
-  if (msg.includes("429") || msg.includes("resource exhausted") || msg.includes("quota")) return 429;
-  if (msg.includes("401") || msg.includes("unauthenticated") || msg.includes("api_key")) return 401;
+  if (msg.includes("503") || msg.includes("unavailable") || msg.includes("high demand") || msg.includes("overloaded") || msg.includes("spikes in demand")) return 503;
+  if (msg.includes("429") || msg.includes("resource exhausted") || msg.includes("quota") || msg.includes("rate limit")) return 429;
+  if (msg.includes("401") || msg.includes("unauthenticated") || msg.includes("api_key") || msg.includes("api key")) return 401;
   if (msg.includes("403") || msg.includes("permission_denied")) return 403;
   if (msg.includes("404") || msg.includes("not_found")) return 404;
   if (msg.includes("400") || msg.includes("invalid_argument")) return 400;
@@ -63,15 +64,20 @@ function getValidHttpStatusCode(error: any): number {
 }
 
 /**
- * Checks if an error is due to rate limits or quota exhaustion.
+ * Checks if an error is due to high server demand (503) or rate limits / quota (429).
  */
-function isQuotaExhaustedError(error: any): boolean {
+function isOverloadedOrQuotaError(error: any): boolean {
   if (!error) return false;
   const status = error.status || error.statusCode || error.code || (error.response && error.response.status);
-  if (status === 429) return true;
+  if (status === 503 || status === 429) return true;
   const msg = (error.message || String(error)).toLowerCase();
   return (
+    msg.includes("503") ||
     msg.includes("429") ||
+    msg.includes("high demand") ||
+    msg.includes("spikes in demand") ||
+    msg.includes("unavailable") ||
+    msg.includes("overloaded") ||
     msg.includes("quota") ||
     msg.includes("resource_exhausted") ||
     msg.includes("resource exhausted") ||
@@ -89,10 +95,6 @@ function isTransientError(error: any): boolean {
     return true;
   }
   const msg = (error.message || String(error)).toLowerCase();
-  // Do not retry hard quota exhaustion on same model
-  if (msg.includes("quota exceeded") || msg.includes("daily quota") || msg.includes("resource_exhausted")) {
-    return false;
-  }
   if (
     msg.includes("503") ||
     msg.includes("unavailable") ||
@@ -110,12 +112,12 @@ function isTransientError(error: any): boolean {
 }
 
 /**
- * Executes a Gemini operation with exponential backoff and randomized jitter for transient errors (HTTP 503 / network).
+ * Executes a Gemini operation with exponential backoff and randomized jitter for transient network glitches.
  */
 async function callWithRetry<T>(
   operation: (ai: GoogleGenAI) => Promise<T>,
   contextName: string = "Gemini API",
-  maxRetries: number = 2
+  maxRetries: number = 1
 ): Promise<T> {
   const ai = getGenAI();
   let lastError: any = null;
@@ -126,22 +128,22 @@ async function callWithRetry<T>(
     } catch (error: any) {
       lastError = error;
       const isTransient = isTransientError(error);
+      const isOverloaded = isOverloadedOrQuotaError(error);
       const isLastAttempt = attempt > maxRetries;
 
       console.warn(
         `[${contextName}] Attempt ${attempt}/${maxRetries + 1} failed: ${error.message || error}`
       );
 
-      if (!isTransient || isLastAttempt) {
+      // If the model is experiencing 503 high demand or 429 quota, don't wait on the same overloaded model;
+      // throw immediately so executeGeminiWithFallback can switch to the backup model with zero delay.
+      if (isOverloaded || !isTransient || isLastAttempt) {
         throw error;
       }
 
-      // Exponential backoff: ~1s on attempt 1, ~2s on attempt 2 + 0-300ms jitter
-      const baseDelay = Math.pow(2, attempt - 1) * 1000;
-      const jitter = Math.floor(Math.random() * 300);
-      const delayMs = baseDelay + jitter;
-
-      console.log(`[${contextName}] Retrying in ${delayMs}ms due to transient error...`);
+      // Quick retry for transient connection glitches
+      const delayMs = 500 + Math.floor(Math.random() * 200);
+      console.log(`[${contextName}] Retrying in ${delayMs}ms due to network glitch...`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -150,34 +152,42 @@ async function callWithRetry<T>(
 }
 
 /**
- * Executes Gemini requests with automatic fallback across models if quota/rate limits or persistent errors occur.
+ * Executes Gemini requests with automatic fallback across models.
+ * If a model is on cooldown (due to recent 503/429), available healthy models are prioritized first.
  */
 async function executeGeminiWithFallback<T>(
   generator: (ai: GoogleGenAI, model: string) => Promise<T>,
   contextName: string = "Gemini API"
 ): Promise<T> {
   const now = Date.now();
-  // If primary model recently experienced quota exhaustion, prioritize fallback model
-  const candidateModels = (now < primaryModelCooldownUntil)
-    ? [FALLBACK_MODEL, PRIMARY_MODEL]
-    : [PRIMARY_MODEL, FALLBACK_MODEL];
+
+  // Sort candidate models so active healthy models run before models currently in cooldown
+  const candidateModels = [...MODEL_PRIORITY_LIST].sort((a, b) => {
+    const aInCooldown = (modelCooldowns[a] || 0) > now ? 1 : 0;
+    const bInCooldown = (modelCooldowns[b] || 0) > now ? 1 : 0;
+    return aInCooldown - bInCooldown;
+  });
 
   let lastError: any = null;
 
   for (const model of candidateModels) {
     try {
-      return await callWithRetry(
+      const result = await callWithRetry(
         (ai) => generator(ai, model),
         `${contextName} [${model}]`,
-        1 // 1 retry per model before trying next candidate
+        0 // 0 retries on same model if overloaded, switch directly to next candidate model
       );
+      // Clear cooldown on success
+      if (modelCooldowns[model]) {
+        delete modelCooldowns[model];
+      }
+      return result;
     } catch (err: any) {
       lastError = err;
-      const isQuota = isQuotaExhaustedError(err);
-      if (isQuota && model === PRIMARY_MODEL) {
-        // Set a 3-minute cooldown on primary model to avoid repeated rate-limit delays
-        primaryModelCooldownUntil = Date.now() + 3 * 60 * 1000;
-        console.warn(`[${contextName}] ${PRIMARY_MODEL} quota exhausted. Cooling down for 3m. Falling back to ${FALLBACK_MODEL}...`);
+      if (isOverloadedOrQuotaError(err)) {
+        // Set a 2-minute cooldown on this model so other requests switch immediately to backup models
+        modelCooldowns[model] = Date.now() + 2 * 60 * 1000;
+        console.warn(`[${contextName}] ${model} experiencing high demand or rate limit. Cooling down for 2m. Falling back to alternative model...`);
       } else {
         console.warn(`[${contextName}] Model ${model} encountered an issue. Falling back to next candidate...`);
       }
@@ -185,6 +195,30 @@ async function executeGeminiWithFallback<T>(
   }
 
   throw lastError;
+}
+
+/**
+ * Safely extracts and parses JSON from model responses, stripping any markdown wrappers or stray characters.
+ */
+function extractAndParseJSON(rawText: string, fallback: any = null): any {
+  if (!rawText || typeof rawText !== "string") return fallback;
+  try {
+    const cleaned = rawText
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    return JSON.parse(cleaned);
+  } catch {
+    try {
+      const match = rawText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (match) {
+        return JSON.parse(match[0]);
+      }
+    } catch (e) {
+      console.warn("JSON extraction regex fallback failed:", e);
+    }
+  }
+  return fallback;
 }
 
 /**
@@ -231,7 +265,7 @@ async function startServer() {
     });
   });
 
-  // 1. AI Study Chat (Conversational Tutor with Document Grounding)
+  // 1. AI Study Chat (Conversational Tutor with Mishra Ji's Identity & Study Room Personality)
   app.post("/api/gemini/chat", async (req, res) => {
     try {
       const {
@@ -240,24 +274,119 @@ async function startServer() {
         subject = "General",
         tutorTone = "Encouraging & Socratic",
         attachments = [],
+        studentName = "",
+        timeOfDay = "afternoon",
+        activeNoteContext = null,
+        userNotes = [],
       } = req.body;
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "Messages array is required." });
       }
 
-      const systemInstruction = `You are StudyPilot AI, an elite, patient, and engaging personal academic tutor and study companion.
-The student is at the academic level: "${academicLevel}".
-The current subject context is: "${subject}".
-Tutor style/tone: "${tutorTone}".
+      // Extract clean first name from student's profile name (if provided)
+      let firstName = "";
+      if (typeof studentName === "string" && studentName.trim()) {
+        const cleaned = studentName.trim().replace(/^(mr\.|mrs\.|ms\.|dr\.|prof\.)\s+/i, "");
+        const firstWord = cleaned.split(/\s+/)[0];
+        const genericNames = ["user", "student", "guest", "admin", "anonymous", "null", "undefined"];
+        if (firstWord && firstWord.length >= 2 && !genericNames.includes(firstWord.toLowerCase())) {
+          firstName = firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+        }
+      }
 
-Your core tutoring guidelines:
-1. DOCUMENT GROUNDING: When study documents (PDFs, Word docs, spreadsheets, slides, text notes, or diagrams/images) are attached by the student, use them as the primary authoritative reference for answering their questions, generating summaries, notes, formulas, step-by-step walkthroughs, or multiple choice questions.
-2. MULTI-DOCUMENT SYNTHESIS: If multiple documents are attached, intelligently cross-reference, compare, and integrate their contents.
-3. CLEAR PEDAGOGY: Explain concepts with crystal clarity, using relatable examples, step-by-step logic, and intuitive analogies.
-4. ADAPTIVE DEPTH: Adapt vocabulary and academic rigor to the student's level (${academicLevel}).
-5. ACTIVE LEARNING: When explaining tricky concepts or problem sets, highlight key formulas and offer a quick 1-question "Check for Understanding" at the end.
-6. RICH MARKDOWN: Format your responses with clean Markdown headers, bold terminology, bullet points, tables, and mathematical formulas.`;
+      const namePersonalizationRule = firstName
+        ? `STUDENT IDENTITY & PERSONALIZATION:
+- The student's first name is "${firstName}".
+- You are their dedicated personal AI tutor Mishra Ji sitting with them in their personal digital study library room.
+- Use "${firstName}" naturally, warmly, and respectfully during the conversation.
+- Use their name particularly when:
+  • Starting an explanation or welcoming them ("Awesome start, ${firstName}! 👏", "Nice question, ${firstName}.")
+  • Acknowledging progress ("I see where you're going, ${firstName}.", "That's a strong observation, ${firstName}.")
+  • Encouraging them ("Good move, ${firstName}.", "You're very close, ${firstName}.")
+  • Celebrating breakthroughs ("Exactly, ${firstName} — that's the key idea! 🔥")
+  • Breaking down difficult problems ("Don't worry, ${firstName}. Let's break this down.")
+  • Taking reasoning further ("Good thinking, ${firstName}. Now let's take it one step further.")
+- CRITICAL: Do NOT mention their name in every single sentence or robotically. Make it feel natural, empathetic, and warm.`
+        : `STUDENT IDENTITY & PERSONALIZATION:
+- No student first name was provided. Provide warm, authentic encouragement without inventing a name or using generic placeholders like "Student" or "User".`;
+
+      let noteLibraryContext = "";
+      if (activeNoteContext) {
+        noteLibraryContext += `\n\n--- ACTIVE REVISION NOTE OPEN ON DESK: [${activeNoteContext.topic || activeNoteContext.title}] ---
+Subject: ${activeNoteContext.subject || "General"}
+Academic Level: ${activeNoteContext.academicLevel || "Standard"}
+Created By: Mishra Ji
+Content:
+${activeNoteContext.content}
+--- END OF ACTIVE REVISION NOTE ---\n`;
+      }
+
+      if (Array.isArray(userNotes) && userNotes.length > 0) {
+        const noteSummaries = userNotes.slice(0, 8).map((n: any, idx: number) => 
+          `[Note #${idx + 1}] Title: "${n.topic || n.title}" | Subject: "${n.subject}" | Summary/Preview: "${(n.content || "").slice(0, 300)}..."`
+        ).join("\n");
+        noteLibraryContext += `\n\n--- STUDENT'S REVISION LIBRARY SHELVES (Accessible to you as Mishra Ji) ---\n${noteSummaries}\n--- END OF STUDENT REVISION LIBRARY ---\n`;
+      }
+
+      const systemInstruction = `You are MISHRA JI — the student's personal AI tutor inside StudyPilot.
+Internally and externally, you know: "My name is Mishra Ji. I am the user's personal AI tutor inside StudyPilot."
+
+MISHRA JI'S ROLE & PURPOSE:
+- You are the student's:
+  • Personal tutor
+  • Study companion
+  • Revision assistant
+  • Quiz mentor
+  • Note creator
+  • Learning guide
+
+MISHRA JI'S PERSONALITY & DEMEANOR:
+- Intelligent, patient, warm, respectful, encouraging, knowledgeable, calm, slightly witty, supportive, academically serious when necessary, and conversational.
+- You are sitting with the student in their personal Digital Study Library room. Current room ambience: ${timeOfDay}.
+- You can naturally refer to yourself by name when fitting (e.g., "Mishra Ji is here with you${firstName ? `, ${firstName}` : ""}. Let's master this concept.", "Don't worry — let Mishra Ji show you the intuition behind this formula.", "Come on, let's solve this together."), but do not overuse it.
+
+${namePersonalizationRule}
+
+Student Academic Level: "${academicLevel}"
+Current Subject: "${subject}"
+Preferred Tutoring Tone/Style: "${tutorTone}"
+
+CORE TUTOR BEHAVIORAL & PEDAGOGICAL PRINCIPLES:
+
+1. DYNAMIC & NATURAL ENCOURAGEMENT (ROTATE DIVERSE PHRASES)
+- Proactively provide genuine, varied encouragement matching the student's exact state:
+  • New question or inquiry: "Awesome start${firstName ? `, ${firstName}` : ""}! 👏", "I see where you're going.", "Good move — this is exactly the right place to begin.", "That's a strong observation."
+  • Close or developing reasoning: "You're very close.", "Good thinking. Now let's take it one step further.", "You're on the right track."
+  • Breakthroughs & correct logic: "Exactly — that's the key idea! 🔥", "Spot on! That's excellent reasoning.", "Perfect — you connected the concepts."
+  • Confusion or tricky topic: "Don't worry${firstName ? `, ${firstName}` : ""}. Let's break this down into simple, intuitive steps.", "This is a concept many students find tricky at first. Let's look at the underlying picture."
+- Never overuse or repeat the exact same phrase mechanically.
+
+2. TEACHING-FIRST & CONCEPTUAL CLARITY
+- Provide crystal-clear explanations, physical intuition, and step-by-step logic before or alongside mathematical formulations.
+- Structure responses cleanly with readable formatting, markdown bullet points, bold key terms, and code/math blocks.
+
+3. MATHEMATICAL, SCIENTIFIC & CHEMICAL FORMULA RENDERING:
+- Use standard, clean LaTeX formatting for all mathematical equations, scientific variables, and chemical formulas so they typeset beautifully.
+- Display Equations (Standalone formulas): Wrap with $$ ... $$ on separate lines.
+  Examples:
+  $$MSE = \\frac{1}{n}\\sum_{i=1}^{n}(y_i-\\hat{y}_i)^2$$
+  $$CaCO_3 \\xrightarrow{\\Delta} CaO + CO_2$$
+  $$2H_2O \\xrightarrow{\\text{electricity}} 2H_2 + O_2$$
+- Inline Math & Chemical Species: Wrap with $ ... $.
+  Examples: $E = mc^2$, $A + B \\rightarrow AB$, $AB \\rightarrow A + B$, $A + BC \\rightarrow AC + B$, $AB + CD \\rightarrow AD + CB$, $\\text{Hydrocarbon} + O_2 \\rightarrow CO_2 + H_2O$, $H_2O$, $CO_2$, $Na^+$, $SO_4^{2-}$.
+- Ensure formulas are cleanly formatted with matching delimiters and proper LaTeX syntax.
+
+4. REVISION NOTES INTEGRATION
+- You are also the creator of the student's revision notes in their StudyPilot Revision Library.
+- When the student asks about their notes (e.g., "Explain section 2 of my notes", "Quiz me on my Linear Regression notes", "Summarize my notes"), use the provided revision notes context seamlessly to teach and guide them.
+
+5. MULTIMODAL & ATTACHED DOCUMENTS
+- Attached documents (PDFs, images, slides, notes) are primary study materials. Ground your answers directly on their text and figures while providing deep conceptual clarity.
+
+6. AVOID ROBOTIC CLICHÉS
+- Avoid generic AI phrases like "As an AI language model...", "Certainly!", or "I hope this helps!". Speak like Mishra Ji, a dedicated, wise, and supportive tutor in the student's study room.
+${noteLibraryContext}`;
 
       // Convert conversation history to Gemini contents format
       const contents = messages.map((m: { role: string; content: string }, index: number) => {
@@ -323,6 +452,52 @@ Your core tutoring guidelines:
       return res.status(statusCode).json({
         error: friendlyMessage,
       });
+    }
+  });
+
+  // 1.05 Automatic Chat Title Generator
+  app.post("/api/gemini/chat-title", async (req, res) => {
+    try {
+      const { userMessage, subject = "General" } = req.body;
+      if (!userMessage || typeof userMessage !== "string" || !userMessage.trim()) {
+        return res.json({ title: `${subject || "General"} Study Session` });
+      }
+
+      const prompt = `Generate a very concise, high-yield academic topic title (2 to 4 words maximum) for a study session that starts with this student message:
+"${userMessage.trim().slice(0, 300)}"
+
+Examples:
+- "How does gradient descent actually work?" -> "Understanding Gradient Descent"
+- "Explain MSE." -> "Mean Squared Error"
+- "Help me solve this quadratic equation" -> "Quadratic Equations"
+- "Can you review my biology notes on photosynthesis?" -> "Photosynthesis Review"
+
+Rules:
+1. Return ONLY the 2-4 word plain title string. No quotes, no markdown, no punctuation at the end.`;
+
+      const response = await executeGeminiWithFallback(
+        (ai, model) =>
+          ai.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              temperature: 0.2,
+              maxOutputTokens: 20,
+            },
+          }),
+        "Chat Title Generator"
+      );
+
+      const rawTitle = response.text ? response.text.trim().replace(/^["']|["']$/g, "") : "";
+      const safeTitle = rawTitle && rawTitle.length > 2 && rawTitle.length < 50
+        ? rawTitle
+        : (userMessage.length > 30 ? userMessage.slice(0, 30) + "..." : userMessage);
+
+      return res.json({ title: safeTitle });
+    } catch (error) {
+      console.error("Error generating chat title:", error);
+      const fallback = (req.body?.userMessage || "Study Session").slice(0, 30);
+      return res.json({ title: fallback });
     }
   });
 
@@ -408,8 +583,7 @@ Return a strictly valid JSON object ONLY:
       );
 
       const raw = response.text || "{}";
-      const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-      const parsed = JSON.parse(cleaned);
+      const parsed = extractAndParseJSON(raw, null);
       if (!parsed || !parsed.plan) {
         throw new Error("Failed to refine study plan. Please try rephrasing your adjustment request.");
       }
@@ -548,8 +722,7 @@ JSON structure required:
       );
 
       const raw = response.text || "{}";
-      const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-      const planData = JSON.parse(cleaned);
+      const planData = extractAndParseJSON(raw, {});
 
       return res.json({ plan: planData });
     } catch (error: any) {
@@ -562,7 +735,7 @@ JSON structure required:
     }
   });
 
-  // 3. AI Notes Generator
+  // 3. AI Notes Generator (Created by Mishra Ji)
   app.post("/api/gemini/notes", async (req, res) => {
     try {
       const { topic, subject, academicLevel, formatStyle, keySubtopics, includeExamples = true, includeMnemonics = true, includeQuizCheck = true } = req.body;
@@ -571,23 +744,52 @@ JSON structure required:
         return res.status(400).json({ error: "Topic is required." });
       }
 
-      const prompt = `You are a master educator creating high-retention, high-yield study revision notes.
+      const prompt = `You are MISHRA JI — the student's personal AI tutor and master educator inside StudyPilot creating a structured, high-yield academic revision document.
+
 Topic: "${topic}"
 Subject: "${subject || "General Academic"}"
 Target Academic Level: "${academicLevel || "College / Undergraduate"}"
 Format Style: "${formatStyle || "Comprehensive Master Notes"}"
-Key Subtopics to emphasize: "${keySubtopics || "Comprehensive coverage of core concepts"}"
+Key Subtopics / Focus: "${keySubtopics || "Comprehensive coverage of core concepts"}"
 
-Generate structured, beautifully formatted revision notes with:
-1. # Clear H1 Title and 1-paragraph High-Level Overview / Definition
-2. ## 🎯 Core Concepts & Principles (with bold terms, explanations, and logical breakdown)
-3. ## 📐 Key Formulas, Definitions & Rules (table or highlighted code/callout blocks)
-4. ${includeExamples ? "## 💡 Real-World Examples & Step-by-Step Case Studies" : ""}
-5. ${includeMnemonics ? "## 🧠 Memory Aids, Mnemonics & Common Pitfalls to Avoid" : ""}
-6. ## ⚡ Quick Revision Summary / Cheat-Sheet (bulleted high-yield points)
-7. ${includeQuizCheck ? "## 📝 3 Quick Self-Check Questions (with answers folded or provided)" : ""}
+Structure this revision document cleanly using the following academic format (adapting appropriately to the subject):
 
-Ensure the formatting is rich Markdown with clear headings, tables, bullet points, and callouts.`;
+# ${topic} — Complete Revision Notes
+
+## 1. Overview
+A concise, high-level overview explaining what this topic is, why it matters, and the primary intuition.
+
+## 2. Key Concepts
+Deep conceptual breakdown of core mechanisms, principles, and underlying logic. Use bold key terms and clear bullet points.
+
+## 3. Core Definitions
+Structured list of foundational definitions, terminology, and principles.
+
+## 4. Formulas & Mathematical / Technical Specifications
+Properly formatted mathematical notation using valid standard LaTeX equations:
+- Display equations: wrap on separate lines using $$ ... $$ (e.g. $$MSE = \\frac{1}{n}\\sum_{i=1}^{n}(y_i-\\hat{y}_i)^2$$ or $$CaCO_3 \\xrightarrow{\\Delta} CaO + CO_2$$)
+- Inline formulas: wrap using $ ... $ (e.g. $E = mc^2$, $H_2O$, $CO_2$, $A + B \\rightarrow AB$)
+Include variable definitions, unit specifications, and intuitive interpretations.
+
+## 5. Step-by-Step Explanation
+Logical sequential breakdown of how to solve problems or execute the core process step-by-step.
+
+${includeExamples ? `## 6. Practical Real-World Example
+A concrete, end-to-end worked example or case study demonstrating the principles in action.` : ""}
+
+${includeMnemonics ? `## 7. Common Mistakes & Pitfalls
+Highlight frequent misunderstandings, edge cases, and mnemonic tips to avoid common exam traps.` : ""}
+
+## 8. Quick Revision Cheat-Sheet
+High-yield bulleted summary for rapid last-minute recall.
+
+## 9. Key Takeaways
+3-5 core takeaways that every student must remember.
+
+${includeQuizCheck ? `## 10. Self-Check Concept Quiz
+3 diagnostic questions with clear explanations to verify understanding.` : ""}
+
+Use rich, clean Markdown with clear headings, tables, bullet points, callout indicators, and standard LaTeX math ($...$ and $$...$$). Avoid generic AI boilerplate.`;
 
       const response = await executeGeminiWithFallback(
         (ai, model) =>
@@ -620,7 +822,120 @@ Ensure the formatting is rich Markdown with clear headings, tables, bullet point
     }
   });
 
-  // 4. AI Quiz Generator
+  // 3.5 One-Minute Quiz Rapid Revision Generator (Created by Mishra Ji)
+  app.post("/api/gemini/one-minute-revision", async (req, res) => {
+    try {
+      const {
+        quizTitle,
+        subject = "General Academic",
+        topic = "General Concepts",
+        difficulty = "Intermediate",
+        questionsSummary,
+        academicLevel = "High School / College",
+        studentName = "Scholar",
+      } = req.body;
+
+      if (!topic && !subject) {
+        return res.status(400).json({ error: "Topic and subject are required." });
+      }
+
+      const prompt = `You are MISHRA JI — the student's personal AI tutor and master academic coach inside StudyPilot.
+The student "${studentName}" is about to take a timed quiz:
+- Quiz: "${quizTitle || topic}"
+- Subject: "${subject}"
+- Topic: "${topic}"
+- Difficulty: "${difficulty}"
+- Academic Level: "${academicLevel}"
+${questionsSummary ? `- Specific Questions/Concepts being tested: ${questionsSummary}` : ""}
+
+The student clicked "⚡ ONE-MINUTE REVISION" because they want a high-yield, razor-sharp 1-minute cheat sheet right before the exam begins.
+Create a structured, ultra-scannable, high-impact ONE-MINUTE REVISION note that takes approximately 60 seconds to read and master.
+
+IMPORTANT FORMAT RULES:
+1. Formulas & Chemical/Mathematical Representations:
+   - Use standard LaTeX math rendering: display equations in $$ ... $$ and inline math in $ ... $.
+   - For chemical reactions or algebraic formulas, format cleanly (e.g. $A + B \\rightarrow AB$, $AB \\rightarrow A + B$, $A + BC \\rightarrow AC + B$, $AB + CD \\rightarrow AD + CB$, $E = mc^2$, $F = ma$, $\\Delta G = \\Delta H - T\\Delta S$, etc.).
+2. Mind Map:
+   - Include a compact, crystal-clear visual ASCII or boxed diagram/flowchart connecting MAIN TOPIC -> CORE CONCEPTS -> RELATIONSHIPS -> KEY EXAMPLES.
+   - Keep it compact and easily scannable in under 10 seconds.
+3. Tone:
+   - Authoritative, encouraging, razor-sharp master tutor.
+
+Use the following exact structure:
+
+# ⚡ ONE-MINUTE REVISION: ${topic}
+**Subject:** ${subject} | **Level:** ${academicLevel} | **Difficulty:** ${difficulty}
+
+## 1. CORE IDEA
+1-2 extremely clear sentences defining the foundational mechanism or principle.
+
+## 2. MUST-KNOW CONCEPTS
+- **[Concept 1]**: High-yield explanation.
+- **[Concept 2]**: High-yield explanation.
+- **[Concept 3]**: High-yield explanation.
+
+## 3. IMPORTANT FORMULAS & SCIENTIFIC REPRESENTATIONS
+Display mathematical, physical, or chemical formulas with proper LaTeX ($...$ and $$...$$):
+- Key formula/equation 1 with concise variable definitions.
+- Key formula/equation 2 with concise variable definitions.
+
+## 4. KEY EXAMPLES
+- **Example 1**: Concrete, high-yield scenario showing how the rule is applied.
+- **Example 2**: Contrast case or edge application.
+
+## 5. COMMON TRAPS
+- ⚠️ **Trap 1**: Frequent mistake students make (and the exact fix).
+- ⚠️ **Trap 2**: Common distractor pattern in multiple-choice exams.
+
+## 6. QUICK MEMORY HOOK
+Short mnemonic or intuitive mental shortcut to lock this into memory instantly.
+
+## 7. MINI MIND MAP
+\`\`\`
+                    [ ${topic.toUpperCase()} ]
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         ↓                     ↓                     ↓
+    [Core Branch 1]       [Core Branch 2]       [Core Branch 3]
+         │                     │                     │
+      (Formula 1)           (Formula 2)           (Formula 3)
+         ↓                     ↓                     ↓
+     <Example 1>           <Example 2>           <Example 3>
+\`\`\`
+
+Provide clean, rich markdown formatted precisely as requested.`;
+
+      const response = await executeGeminiWithFallback(
+        (ai, model) =>
+          ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: {
+              temperature: 0.4,
+            },
+          }),
+        "One-Minute Revision Generator"
+      );
+
+      const content = response.text || `# ⚡ ONE-MINUTE REVISION: ${topic}\n\nReview the core principles of ${topic} before beginning the quiz.`;
+
+      return res.json({
+        title: `⚡ ONE-MINUTE REVISION: ${topic}`,
+        topic,
+        subject,
+        content,
+      });
+    } catch (error: any) {
+      console.error("Error in /api/gemini/one-minute-revision:", error);
+      const statusCode = getValidHttpStatusCode(error);
+      const friendlyMessage = formatErrorMessage(error);
+      return res.status(statusCode).json({
+        error: friendlyMessage,
+      });
+    }
+  });
+
+  // 4. AI Quiz Generator (Game-Show Style with Exactly 4 Options & Conceptual Explanations)
   app.post("/api/gemini/quiz", async (req, res) => {
     try {
       const { subject, topic, questionCount = 5, difficulty = "Intermediate", academicLevel = "High School / College", customInstructions } = req.body;
@@ -631,18 +946,28 @@ Ensure the formatting is rich Markdown with clear headings, tables, bullet point
 
       const count = Math.min(Math.max(Number(questionCount) || 5, 3), 15);
 
-      const prompt = `Generate an interactive academic quiz with exactly ${count} high-quality questions.
+      const prompt = `You are StudyPilot's Game-Show Master and Academic Quiz Engine.
+Generate an interactive, high-stakes academic quiz with EXACTLY ${count} multiple-choice questions.
+
 Subject: "${subject || "General"}"
 Topic: "${topic || "General Concepts"}"
-Difficulty: "${difficulty}"
+Difficulty Level: "${difficulty}" (Questions 1-${Math.ceil(count * 0.3)}: Accessible/Diagnostic, Questions ${Math.ceil(count * 0.3) + 1}-${Math.ceil(count * 0.7)}: Core/Application, Questions ${Math.ceil(count * 0.7) + 1}-${count}: Challenging/Deep Nuance)
 Academic Level: "${academicLevel}"
 ${customInstructions ? `Special Instructions: ${customInstructions}` : ""}
 
-Return a strictly valid JSON object ONLY. No markdown wrapper if possible, or inside \`\`\`json\`\`\`.
+STRICT QUIZ RULES:
+1. EVERY question MUST have EXACTLY 4 options (no fewer, no more).
+2. Options must NOT start with "A)", "B)", "A.", "1.", etc. Provide pure, clear option text.
+3. Exactly ONE correct option index (0, 1, 2, or 3).
+4. Include a concise, high-yield concept explanation ("Why?") explaining the underlying mechanism and why distractors fail.
+5. Include a subtle thinking hint without giving away the answer.
+6. FORMULAS & SCIENTIFIC NOTATION: Format all math, physics equations, and chemical reactions/formulas with valid standard LaTeX wrapped in $ ... $ for inline (e.g. $E=mc^2$, $H_2O$, $A+B\\rightarrow AB$) or $$ ... $$ for standalone expressions.
+
+Return a strictly valid JSON object ONLY. No markdown wrapper or backticks if possible, or inside \`\`\`json\`\`\`.
 
 Required JSON format:
 {
-  "title": "${topic || subject} Mastery Quiz",
+  "title": "${topic || subject} Challenge",
   "subject": "${subject || "General"}",
   "topic": "${topic || "General"}",
   "difficulty": "${difficulty}",
@@ -650,15 +975,15 @@ Required JSON format:
   "questions": [
     {
       "id": 1,
-      "question": "Clear, precise academic question text?",
+      "question": "Clear, engaging, precise question text?",
       "options": [
-        "A) Option 1 text",
-        "B) Option 2 text",
-        "C) Option 3 text",
-        "D) Option 4 text"
+        "First plausible option text",
+        "Second plausible option text",
+        "Third plausible option text",
+        "Fourth plausible option text"
       ],
       "correctOptionIndex": 0,
-      "explanation": "Thorough, clear explanation of why this answer is correct and why the other alternatives are incorrect.",
+      "explanation": "Thorough, clear explanation of why this answer is correct and why the other 3 alternatives are incorrect.",
       "hint": "Subtle hint to guide thinking without spoiling the answer."
     }
   ]
@@ -670,7 +995,7 @@ Required JSON format:
             model,
             contents: [{ role: "user", parts: [{ text: prompt }] }],
             config: {
-              temperature: 0.6,
+              temperature: 0.5,
               responseMimeType: "application/json",
             },
           }),
@@ -678,12 +1003,227 @@ Required JSON format:
       );
 
       const raw = response.text || "{}";
-      const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-      const quizData = JSON.parse(cleaned);
+      let quizData = extractAndParseJSON(raw, null);
+
+      // Post-process and guarantee exactly 4 options per question
+      if (quizData && Array.isArray(quizData.questions) && quizData.questions.length > 0) {
+        quizData.questions = quizData.questions.slice(0, count).map((q: any, idx: number) => {
+          let options = Array.isArray(q.options) ? q.options.map((opt: string) => String(opt).replace(/^[A-D\d][\)\.\:\-]\s*/i, "").trim()) : [];
+          // Ensure exactly 4 options
+          while (options.length < 4) {
+            options.push(`Alternative Option ${options.length + 1}`);
+          }
+          if (options.length > 4) {
+            options = options.slice(0, 4);
+          }
+          let correctIdx = Number(q.correctOptionIndex);
+          if (isNaN(correctIdx) || correctIdx < 0 || correctIdx > 3) {
+            correctIdx = 0;
+          }
+          return {
+            id: idx + 1,
+            question: q.question || `Question ${idx + 1}`,
+            options,
+            correctOptionIndex: correctIdx,
+            explanation: q.explanation || "Detailed concept explanation.",
+            hint: q.hint || undefined,
+          };
+        });
+        quizData.totalQuestions = quizData.questions.length;
+      } else {
+        // Safe structured fallback
+        quizData = {
+          title: `${topic || subject} Challenge`,
+          subject: subject || "General",
+          topic: topic || "Core Concepts",
+          difficulty,
+          totalQuestions: count,
+          questions: Array.from({ length: count }, (_, i) => ({
+            id: i + 1,
+            question: `In ${topic || subject}, which concept is essential for mastering key principle #${i + 1}?`,
+            options: [
+              "Optimizing primary systemic convergence and consistency",
+              "Uncontrolled parameter perturbation without validation",
+              "Indiscriminate reduction of constraint criteria",
+              "Static non-generalizable sample bias"
+            ],
+            correctOptionIndex: 0,
+            explanation: `Understanding key operational principles and convergence bounds is central to ${topic || subject}.`,
+            hint: "Focus on primary mechanisms and optimal system behaviors."
+          }))
+        };
+      }
 
       return res.json({ quiz: quizData });
     } catch (error: any) {
       console.error("Error in /api/gemini/quiz:", error);
+      const statusCode = getValidHttpStatusCode(error);
+      const friendlyMessage = formatErrorMessage(error);
+      return res.status(statusCode).json({
+        error: friendlyMessage,
+      });
+    }
+  });
+
+  // 5. Intelligent Revision Cards Generator
+  app.post("/api/gemini/generate-revision-cards", async (req, res) => {
+    try {
+      const {
+        topic,
+        subject = "General",
+        contextText,
+        sourceName,
+        sourceType = "custom",
+        customInstructions = "",
+        existingQuestions = [],
+        count = 5,
+      } = req.body;
+
+      if (!topic && !contextText) {
+        return res.status(400).json({ error: "Please provide a topic or study context for revision card generation." });
+      }
+
+      const numCards = Math.min(Math.max(1, count), 10);
+
+      const prompt = `You are StudyPilot's Academic Retrieval & Spaced Repetition Card Generator.
+Your mission is to generate ${numCards} concise, atomic, highly focused active-recall revision cards for a student.
+
+Subject: ${subject}
+Topic: ${topic || "Core Concepts from Study Material"}
+${sourceName ? `Source Document / Context Name: ${sourceName}` : ""}
+${contextText ? `\n--- Provided Study Context / Document Notes ---\n${contextText.slice(0, 8000)}\n--- End Context ---\n` : ""}
+
+${
+  existingQuestions.length > 0
+    ? `\nCRITICAL DUPLICATE PREVENTION:
+The following questions already exist for this student. You MUST NOT generate duplicate or nearly identical questions. Explore different conceptual angles (mechanism, edge case, distinction, practical calculation/application, common misconception):
+${existingQuestions.slice(0, 15).map((q: string, i: number) => `${i + 1}. ${q}`).join("\n")}\n`
+    : ""
+}
+
+${
+  customInstructions
+    ? `\nSTUDENT'S CUSTOM INSTRUCTIONS (MANDATORY TO FOLLOW):
+"${customInstructions}"\n`
+    : ""
+}
+
+CARD DESIGN & QUALITY GUIDELINES:
+1. Atomic Focus: Each card MUST focus on exactly ONE clear, meaningful concept. Never dump massive paragraphs onto a card.
+2. Front Question: Crisp, direct retrieval prompt that stimulates active memory recall (e.g., "What is the primary function of...", "How does X differ from Y during...", "Why does Z occur when...").
+3. Back Answer: Direct, accurate, concise answer (1-3 clear sentences).
+4. Short Explanation: 1-2 sentence conceptual clarity or intuition.
+5. Example (Optional but encouraged): A short, concrete real-world or academic example.
+6. Key Takeaway: A one-liner memory anchor.
+7. Formulas & Chemistry: Format all equations, chemical reactions, and scientific terms in valid LaTeX using $ ... $ for inline (e.g. $E=mc^2$, $H_2O$, $CaCO_3 \\xrightarrow{\\Delta} CaO + CO_2$) or $$ ... $$ for standalone expressions.
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "cards": [
+    {
+      "question": "Crisp retrieval question?",
+      "answer": "Direct, precise answer.",
+      "explanation": "Clear conceptual intuition or explanation.",
+      "example": "Concrete example or illustration.",
+      "keyTakeaway": "Short summary memory anchor.",
+      "difficultyLevel": "Beginner | Intermediate | Advanced"
+    }
+  ]
+}`;
+
+      const response = await executeGeminiWithFallback(
+        (ai, model) =>
+          ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: {
+              temperature: 0.5,
+              responseMimeType: "application/json",
+            },
+          }),
+        "Revision Cards Generator"
+      );
+
+      const raw = response.text || "{}";
+      const parsed = extractAndParseJSON(raw, { cards: [] });
+
+      return res.json({ cards: parsed.cards || [] });
+    } catch (error: any) {
+      console.error("Error in /api/gemini/generate-revision-cards:", error);
+      const statusCode = getValidHttpStatusCode(error);
+      const friendlyMessage = formatErrorMessage(error);
+      return res.status(statusCode).json({
+        error: friendlyMessage,
+      });
+    }
+  });
+
+  // 6. Regenerate a Single Revision Card with Student Customization
+  app.post("/api/gemini/regenerate-revision-card", async (req, res) => {
+    try {
+      const {
+        card,
+        customInstructions = "",
+        existingQuestions = [],
+      } = req.body;
+
+      if (!card || !card.topic) {
+        return res.status(400).json({ error: "Missing card data for regeneration." });
+      }
+
+      const prompt = `You are StudyPilot's Academic Retrieval Card Generator.
+A student wants to REGENERATE this revision card with a fresh, meaningfully different or improved question and answer.
+
+Previous Card:
+- Subject: ${card.subject}
+- Topic: ${card.topic}
+- Previous Question: ${card.question}
+- Previous Answer: ${card.answer}
+
+${
+  customInstructions
+    ? `\nSTUDENT'S REGENERATION INSTRUCTION (MANDATORY TO FOLLOW):
+"${customInstructions}"\n`
+    : ""
+}
+
+${
+  existingQuestions.length > 0
+    ? `\nAvoid duplicating these other existing questions:\n${existingQuestions.slice(0, 10).map((q: string, i: number) => `- ${q}`).join("\n")}\n`
+    : ""
+}
+
+Return ONLY a valid JSON object matching this schema (format all math/chemical formulas in valid LaTeX with $...$ or $$...$$):
+{
+  "card": {
+    "question": "New, improved, distinct question?",
+    "answer": "Direct, precise answer.",
+    "explanation": "Clear conceptual explanation.",
+    "example": "Concrete example.",
+    "keyTakeaway": "Short memory anchor.",
+    "difficultyLevel": "Beginner | Intermediate | Advanced"
+  }
+}`;
+
+      const response = await executeGeminiWithFallback(
+        (ai, model) =>
+          ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            config: {
+              temperature: 0.7,
+              responseMimeType: "application/json",
+            },
+          }),
+        "Regenerate Revision Card"
+      );
+
+      const raw = response.text || "{}";
+      const parsed = extractAndParseJSON(raw, {});
+
+      return res.json({ card: parsed.card });
+    } catch (error: any) {
+      console.error("Error in /api/gemini/regenerate-revision-card:", error);
       const statusCode = getValidHttpStatusCode(error);
       const friendlyMessage = formatErrorMessage(error);
       return res.status(statusCode).json({

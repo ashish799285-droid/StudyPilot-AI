@@ -1,5 +1,8 @@
 import React from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useTimer } from "../../context/TimerContext";
+import { useQuizSession } from "../../context/QuizSessionContext";
+import { formatSeconds } from "../../utils/pomodoroEngine";
 import { NavigationTab } from "../../types";
 import {
   Sparkles,
@@ -10,6 +13,9 @@ import {
   Menu,
   X,
   Search,
+  Clock,
+  Pause,
+  Play,
 } from "lucide-react";
 
 interface HeaderProps {
@@ -30,6 +36,20 @@ export const Header: React.FC<HeaderProps> = ({
   setMobileMenuOpen,
 }) => {
   const { user, signOut } = useAuth();
+  const { activeSession, timerState, timeRemainingSeconds, timerMode, pauseSession, resumeSession } = useTimer();
+  const { requestTabNavigation } = useQuizSession();
+
+  const handleTabClick = (tab: NavigationTab) => {
+    requestTabNavigation(tab, () => {
+      setCurrentTab(tab);
+    });
+  };
+
+  const handleSettingsClick = () => {
+    requestTabNavigation("settings", () => {
+      openSettingsModal();
+    });
+  };
 
   return (
     <header className="sticky top-0 z-30 flex h-20 w-full items-center justify-between border-b border-slate-200 bg-white/95 px-6 sm:px-10 backdrop-blur-md shrink-0">
@@ -52,7 +72,28 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 sm:gap-4">
+        {/* Active Timer Mini-Widget in Header */}
+        {activeSession && currentTab !== "timer" && (
+          <div
+            onClick={() => handleTabClick("timer")}
+            className={`cursor-pointer flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-bold transition-all shadow-2xs ${
+              timerMode === "break"
+                ? "border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100"
+                : timerState === "paused"
+                ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                : "border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+            }`}
+            title="Active Focus Session (click to open timer)"
+          >
+            <Clock className="h-3.5 w-3.5 animate-pulse text-indigo-600" />
+            <span className="font-mono font-black">{formatSeconds(timeRemainingSeconds)}</span>
+            <span className="hidden md:inline text-[11px] font-medium opacity-80 truncate max-w-[100px]">
+              {activeSession.topic || activeSession.subject}
+            </span>
+          </div>
+        )}
+
         {/* Streak Pill */}
         {user && (
           <div
@@ -67,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Ask AI Tutor Button */}
         <button
           type="button"
-          onClick={() => setCurrentTab("tutor")}
+          onClick={() => handleTabClick("tutor")}
           className={`hidden sm:flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wider transition-all shadow-xs ${
             currentTab === "tutor"
               ? "bg-indigo-600 text-white"
@@ -83,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={openSettingsModal}
+              onClick={handleSettingsClick}
               title={`Logged in as ${user.name}`}
               className="w-10 h-10 rounded-full bg-slate-200 border-2 border-white shadow-sm overflow-hidden flex items-center justify-center hover:ring-2 hover:ring-indigo-500/30 transition cursor-pointer"
             >

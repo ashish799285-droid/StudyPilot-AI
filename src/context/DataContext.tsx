@@ -6,10 +6,18 @@ import {
   QuizResult,
   ChatSession,
   ChatMessage,
+  RevisionCard,
+  RecallRating,
 } from "../types";
 import { useAuth } from "./AuthContext";
 import { db } from "../services/firebaseConfig";
 import { cleanFirestoreData } from "../utils/firestoreSanitizer";
+import {
+  calculateNextReview,
+  toLocalDateString,
+  calculateCardPriorityScore,
+  getDaysDifference,
+} from "../utils/spacedRepetitionEngine";
 import {
   collection,
   query,
@@ -20,6 +28,7 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  writeBatch,
   arrayUnion,
 } from "firebase/firestore";
 
@@ -51,11 +60,29 @@ interface DataContextType {
   // Chat Sessions
   chatSessions: ChatSession[];
   activeSession: ChatSession | null;
-  createChatSession: (subject: string, academicLevel: string, firstMessage?: string) => Promise<ChatSession>;
+  createChatSession: (subject: string, academicLevel: string, sessionTitle?: string) => Promise<ChatSession>;
   selectChatSession: (sessionId: string) => void;
   addMessageToActiveSession: (message: Omit<ChatMessage, "id" | "timestamp">, targetSessionId?: string) => Promise<void>;
   deleteChatSession: (sessionId: string) => Promise<void>;
   clearChatSession: (sessionId: string) => Promise<void>;
+  updateChatSessionTitle: (sessionId: string, title: string) => Promise<void>;
+
+  // Spaced Repetition Revision Cards
+  revisionCards: RevisionCard[];
+  saveRevisionCards: (
+    cards: Array<Omit<RevisionCard, "id" | "userId" | "createdAt" | "updatedAt">>
+  ) => Promise<RevisionCard[]>;
+  recordCardReview: (
+    cardId: string,
+    rating: RecallRating,
+    examDate?: string
+  ) => Promise<{ card: RevisionCard; feedbackMessage: string }>;
+  updateRevisionCard: (cardId: string, updates: Partial<RevisionCard>) => Promise<void>;
+  deleteRevisionCard: (cardId: string) => Promise<void>;
+  deleteMultipleCards: (cardIds: string[]) => Promise<void>;
+  deleteAllRevisionCards: () => Promise<void>;
+  clearRevisionHistory: () => Promise<void>;
+  toggleHideCard: (cardId: string) => Promise<void>;
 
   // Overview Stats
   stats: {
@@ -65,6 +92,9 @@ interface DataContextType {
     tasksCompleted: number;
     activePlanProgress: number;
     studyStreak: number;
+    totalRevisionCards: number;
+    dueRevisionCards: number;
+    masteredCardsCount: number;
   };
 }
 
@@ -80,6 +110,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [revisionCards, setRevisionCards] = useState<RevisionCard[]>([]);
 
   // Firestore Real-Time Listeners & Seeding for authenticated user
   useEffect(() => {
@@ -89,6 +120,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setQuizzes([]);
       setQuizResults([]);
       setChatSessions([]);
+      setRevisionCards([]);
       setActiveSessionId(null);
       return;
     }
@@ -432,12 +464,187 @@ Would you like to try a practice substrate together to test this rule?`,
       }
     });
 
+    // 6. Spaced Repetition Revision Cards Listener
+    const cardsQuery = query(collection(db, "revisionCards"), where("userId", "==", userId));
+    const unsubCards = onSnapshot(cardsQuery, async (snapshot) => {
+      const seededCardsKey = `studypilot_cards_seeded_${userId}`;
+      if (snapshot.empty) {
+        if (!localStorage.getItem(seededCardsKey)) {
+          localStorage.setItem(seededCardsKey, "true");
+          const todayStr = toLocalDateString();
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const tomorrowStr = toLocalDateString(tomorrow);
+
+          const defaultCards: RevisionCard[] = [
+            {
+              id: `card_${Date.now()}_1`,
+              userId,
+              subject: "Computer Science",
+              topic: "Database Normalization",
+              question: "What specific anomaly does Third Normal Form (3NF) eliminate after 2NF is satisfied?",
+              answer: "3NF eliminates transitive functional dependencies by ensuring non-key attributes depend strictly and solely on the primary candidate key.",
+              explanation: "If attribute X determines Y and Y determines Z, then Z transitively depends on X. 3NF removes Y -> Z into a dedicated relation.",
+              example: "Moving 'DepartmentCode -> DepartmentBuilding' out of an Employee record into a separate Department table.",
+              keyTakeaway: "Every non-key attribute must depend on the key, the whole key, and nothing but the key.",
+              source: { type: "notes", name: "Database Systems Notes" },
+              difficultyLevel: "Intermediate",
+              status: "Needs Review",
+              repetitionIntervalDays: 1,
+              easeFactor: 2.3,
+              consecutiveCorrect: 0,
+              consecutiveIncorrect: 1,
+              totalReviews: 2,
+              successfulRecalls: 1,
+              incorrectRecalls: 1,
+              lastReviewedAt: Date.now() - 86400000,
+              nextReviewDate: todayStr,
+              nextReviewTimestamp: Date.now(),
+              priorityScore: 85,
+              isHidden: false,
+              isMastered: false,
+              createdAt: Date.now() - 86400000 * 2,
+              updatedAt: Date.now() - 86400000,
+            },
+            {
+              id: `card_${Date.now()}_2`,
+              userId,
+              subject: "Biology",
+              topic: "Cellular Respiration",
+              question: "What is the precise molecular role of Oxygen in oxidative phosphorylation?",
+              answer: "Oxygen serves as the terminal electron acceptor at Complex IV, reacting with protons (H+) to yield metabolic Water (H2O).",
+              explanation: "Without oxygen drawing electrons down the potential gradient, electron flow stops, collapsing the proton-motive force needed for ATP synthesis.",
+              example: "Cyanide toxicity is lethal because it binds Complex IV and prevents electron handoff to oxygen.",
+              keyTakeaway: "Oxygen = Final Electron Acceptor creating Water.",
+              source: { type: "plan", name: "Biology Midterm Sprint" },
+              difficultyLevel: "Intermediate",
+              status: "Developing",
+              repetitionIntervalDays: 2,
+              easeFactor: 2.5,
+              consecutiveCorrect: 1,
+              consecutiveIncorrect: 0,
+              totalReviews: 1,
+              successfulRecalls: 1,
+              incorrectRecalls: 0,
+              lastReviewedAt: Date.now() - 86400000 * 2,
+              nextReviewDate: todayStr,
+              nextReviewTimestamp: Date.now(),
+              priorityScore: 50,
+              isHidden: false,
+              isMastered: false,
+              createdAt: Date.now() - 86400000 * 2,
+              updatedAt: Date.now() - 86400000 * 2,
+            },
+            {
+              id: `card_${Date.now()}_3`,
+              userId,
+              subject: "Organic Chemistry",
+              topic: "SN1 vs SN2 Reactions",
+              question: "Why do tertiary substrates undergo substitution exclusively via SN1 rather than SN2?",
+              answer: "Steric congestion physically blocks backside nucleophilic attack (ruling out SN2), while three alkyl groups inductively stabilize the carbocation intermediate (promoting SN1).",
+              explanation: "SN2 transition state is extremely hindered by bulky substituents. SN1 proceeds via a planar carbocation that forms readily at tertiary carbons.",
+              example: "tert-Butyl chloride reacts with H2O in polar protic solvent via SN1.",
+              keyTakeaway: "Tertiary = high steric barrier + stable carbocation = SN1 exclusively.",
+              source: { type: "tutor", name: "SN1 vs SN2 Dialogue" },
+              difficultyLevel: "Advanced",
+              status: "Strong",
+              repetitionIntervalDays: 5,
+              easeFactor: 2.6,
+              consecutiveCorrect: 3,
+              consecutiveIncorrect: 0,
+              totalReviews: 3,
+              successfulRecalls: 3,
+              incorrectRecalls: 0,
+              lastReviewedAt: Date.now() - 86400000 * 5,
+              nextReviewDate: todayStr,
+              nextReviewTimestamp: Date.now(),
+              priorityScore: 30,
+              isHidden: false,
+              isMastered: false,
+              createdAt: Date.now() - 86400000 * 7,
+              updatedAt: Date.now() - 86400000 * 5,
+            },
+            {
+              id: `card_${Date.now()}_4`,
+              userId,
+              subject: "Computer Science",
+              topic: "Database Indexing",
+              question: "Why are B+ Trees favored over Binary Search Trees for disk-based relational storage?",
+              answer: "B+ Trees have massive branching factors (shallow height), dramatically reducing disk I/O seek operations, and leaf nodes are linked for linear range scans.",
+              explanation: "Disk access is thousands of times slower than RAM. Minimizing tree depth is essential for fast storage reads.",
+              example: "PostgreSQL and MySQL InnoDB default to B+ Tree indexes for primary and secondary keys.",
+              keyTakeaway: "High fan-out = minimal disk seeks + linked leaves for range queries.",
+              source: { type: "notes", name: "Database Systems Notes" },
+              difficultyLevel: "Intermediate",
+              status: "Developing",
+              repetitionIntervalDays: 3,
+              easeFactor: 2.5,
+              consecutiveCorrect: 2,
+              consecutiveIncorrect: 0,
+              totalReviews: 2,
+              successfulRecalls: 2,
+              incorrectRecalls: 0,
+              lastReviewedAt: Date.now() - 86400000 * 2,
+              nextReviewDate: tomorrowStr,
+              nextReviewTimestamp: Date.now() + 86400000,
+              priorityScore: 25,
+              isHidden: false,
+              isMastered: false,
+              createdAt: Date.now() - 86400000 * 3,
+              updatedAt: Date.now() - 86400000 * 2,
+            },
+            {
+              id: `card_${Date.now()}_5`,
+              userId,
+              subject: "Calculus",
+              topic: "Chain Rule",
+              question: "State the mathematical formula for the Chain Rule of a composite function h(x) = f(g(x)).",
+              answer: "h'(x) = f'(g(x)) · g'(x) — differentiate the outer function keeping the inner intact, then multiply by the inner derivative.",
+              explanation: "The rate of change of the overall composite equals the rate of change of the outer with respect to the inner, multiplied by the rate of change of the inner.",
+              example: "d/dx [sin(x²)] = cos(x²) · 2x = 2x cos(x²).",
+              keyTakeaway: "Outer derivative evaluated at inner × inner derivative.",
+              source: { type: "custom", name: "Calculus Formula Practice" },
+              difficultyLevel: "Beginner",
+              status: "Strong",
+              repetitionIntervalDays: 6,
+              easeFactor: 2.6,
+              consecutiveCorrect: 3,
+              consecutiveIncorrect: 0,
+              totalReviews: 3,
+              successfulRecalls: 3,
+              incorrectRecalls: 0,
+              lastReviewedAt: Date.now() - 86400000 * 6,
+              nextReviewDate: todayStr,
+              nextReviewTimestamp: Date.now(),
+              priorityScore: 20,
+              isHidden: false,
+              isMastered: false,
+              createdAt: Date.now() - 86400000 * 10,
+              updatedAt: Date.now() - 86400000 * 6,
+            },
+          ];
+
+          for (const card of defaultCards) {
+            await setDoc(doc(db, "revisionCards", card.id), card).catch((e) =>
+              console.warn("Seed card err:", e)
+            );
+          }
+        }
+      } else {
+        const loaded: RevisionCard[] = [];
+        snapshot.forEach((docSnap) => loaded.push(docSnap.data() as RevisionCard));
+        loaded.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        setRevisionCards(loaded);
+      }
+    });
+
     return () => {
       unsubPlans();
       unsubNotes();
       unsubQuizzes();
       unsubResults();
       unsubChats();
+      unsubCards();
     };
   }, [userId]);
 
@@ -801,6 +1008,233 @@ Would you like to try a practice substrate together to test this rule?`,
     }
   };
 
+  const updateChatSessionTitle = async (sessionId: string, title: string) => {
+    if (!userId || !db || !title.trim()) return;
+    const safeTitle = title.trim().slice(0, 60);
+    setChatSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, title: safeTitle, updatedAt: Date.now() } : s))
+    );
+    try {
+      await updateDoc(doc(db, "chatSessions", sessionId), cleanFirestoreData({
+        title: safeTitle,
+        updatedAt: Date.now(),
+      }));
+    } catch (err) {
+      console.error(`[Firestore Error] Failed to update chatSessions/${sessionId} title:`, err);
+    }
+  };
+
+  // --- Spaced Repetition Revision Cards Actions ---
+
+  const saveRevisionCards = async (
+    cardsData: Array<Omit<RevisionCard, "id" | "userId" | "createdAt" | "updatedAt">>
+  ): Promise<RevisionCard[]> => {
+    if (!userId) throw new Error("Please sign in to save revision cards.");
+
+    const todayStr = toLocalDateString();
+    const createdCards: RevisionCard[] = [];
+
+    for (const cardData of cardsData) {
+      const cardId = `card_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newCard: RevisionCard = {
+        ...cardData,
+        id: cardId,
+        userId,
+        status: cardData.status || "Developing",
+        repetitionIntervalDays: cardData.repetitionIntervalDays || 1,
+        easeFactor: cardData.easeFactor || 2.5,
+        consecutiveCorrect: cardData.consecutiveCorrect || 0,
+        consecutiveIncorrect: cardData.consecutiveIncorrect || 0,
+        totalReviews: cardData.totalReviews || 0,
+        successfulRecalls: cardData.successfulRecalls || 0,
+        incorrectRecalls: cardData.incorrectRecalls || 0,
+        nextReviewDate: cardData.nextReviewDate || todayStr,
+        nextReviewTimestamp: cardData.nextReviewTimestamp || Date.now(),
+        priorityScore: cardData.priorityScore || 50,
+        isHidden: cardData.isHidden || false,
+        isMastered: cardData.isMastered || false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      createdCards.push(newCard);
+
+      if (db) {
+        try {
+          await setDoc(doc(db, "revisionCards", cardId), cleanFirestoreData(newCard));
+        } catch (err) {
+          console.error(`[Firestore Error] Failed to save revisionCards/${cardId}:`, err);
+        }
+      }
+    }
+
+    setRevisionCards((prev) => [...createdCards, ...prev]);
+    return createdCards;
+  };
+
+  const recordCardReview = async (
+    cardId: string,
+    rating: RecallRating,
+    examDate?: string
+  ): Promise<{ card: RevisionCard; feedbackMessage: string }> => {
+    const existing = revisionCards.find((c) => c.id === cardId);
+    if (!existing) throw new Error("Card not found");
+
+    const calculation = calculateNextReview(existing, rating, examDate);
+
+    const updatedCard: RevisionCard = {
+      ...existing,
+      repetitionIntervalDays: calculation.repetitionIntervalDays,
+      easeFactor: calculation.easeFactor,
+      consecutiveCorrect: calculation.consecutiveCorrect,
+      consecutiveIncorrect: calculation.consecutiveIncorrect,
+      status: calculation.status,
+      isMastered: calculation.isMastered,
+      nextReviewDate: calculation.nextReviewDate,
+      nextReviewTimestamp: calculation.nextReviewTimestamp,
+      priorityScore: calculation.priorityScore,
+      totalReviews: (existing.totalReviews || 0) + 1,
+      successfulRecalls:
+        rating === "forgot"
+          ? existing.successfulRecalls || 0
+          : (existing.successfulRecalls || 0) + 1,
+      incorrectRecalls:
+        rating === "forgot"
+          ? (existing.incorrectRecalls || 0) + 1
+          : existing.incorrectRecalls || 0,
+      lastReviewedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    setRevisionCards((prev) => prev.map((c) => (c.id === cardId ? updatedCard : c)));
+
+    if (userId && db) {
+      try {
+        await updateDoc(doc(db, "revisionCards", cardId), cleanFirestoreData(updatedCard as unknown as Record<string, any>));
+      } catch (err) {
+        console.error(`[Firestore Error] Failed to update revisionCards/${cardId}:`, err);
+      }
+    }
+
+    return { card: updatedCard, feedbackMessage: calculation.feedbackMessage };
+  };
+
+  const updateRevisionCard = async (cardId: string, updates: Partial<RevisionCard>): Promise<void> => {
+    const updatedData = { ...updates, updatedAt: Date.now() };
+    setRevisionCards((prev) => prev.map((c) => (c.id === cardId ? { ...c, ...updatedData } : c)));
+
+    if (userId && db) {
+      try {
+        await updateDoc(doc(db, "revisionCards", cardId), cleanFirestoreData(updatedData));
+      } catch (err) {
+        console.error(`[Firestore Error] Failed to update revisionCards/${cardId}:`, err);
+      }
+    }
+  };
+
+  const deleteRevisionCard = async (cardId: string): Promise<void> => {
+    setRevisionCards((prev) => prev.filter((c) => c.id !== cardId));
+
+    if (userId && db) {
+      try {
+        await deleteDoc(doc(db, "revisionCards", cardId));
+      } catch (err) {
+        console.error(`[Firestore Error] Failed to delete revisionCards/${cardId}:`, err);
+      }
+    }
+  };
+
+  const deleteMultipleCards = async (cardIds: string[]): Promise<void> => {
+    if (cardIds.length === 0) return;
+    const idSet = new Set(cardIds);
+    setRevisionCards((prev) => prev.filter((c) => !idSet.has(c.id)));
+
+    if (userId && db) {
+      try {
+        const batch = writeBatch(db);
+        cardIds.forEach((id) => {
+          batch.delete(doc(db, "revisionCards", id));
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error(`[Firestore Error] Failed batch deletion of revision cards:`, err);
+      }
+    }
+  };
+
+  const deleteAllRevisionCards = async (): Promise<void> => {
+    const currentIds = revisionCards.map((c) => c.id);
+    setRevisionCards([]);
+
+    if (userId && db && currentIds.length > 0) {
+      try {
+        const batch = writeBatch(db);
+        currentIds.forEach((id) => {
+          batch.delete(doc(db, "revisionCards", id));
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error(`[Firestore Error] Failed to delete all revision cards:`, err);
+      }
+    }
+  };
+
+  const clearRevisionHistory = async (): Promise<void> => {
+    const todayStr = toLocalDateString();
+    setRevisionCards((prev) =>
+      prev.map((c) => ({
+        ...c,
+        status: "Developing",
+        repetitionIntervalDays: 1,
+        easeFactor: 2.5,
+        consecutiveCorrect: 0,
+        consecutiveIncorrect: 0,
+        totalReviews: 0,
+        successfulRecalls: 0,
+        incorrectRecalls: 0,
+        nextReviewDate: todayStr,
+        nextReviewTimestamp: Date.now(),
+        priorityScore: 50,
+        isMastered: false,
+        lastReviewedAt: undefined,
+        updatedAt: Date.now(),
+      }))
+    );
+
+    if (userId && db) {
+      try {
+        const batch = writeBatch(db);
+        revisionCards.forEach((c) => {
+          batch.update(doc(db, "revisionCards", c.id), {
+            status: "Developing",
+            repetitionIntervalDays: 1,
+            easeFactor: 2.5,
+            consecutiveCorrect: 0,
+            consecutiveIncorrect: 0,
+            totalReviews: 0,
+            successfulRecalls: 0,
+            incorrectRecalls: 0,
+            nextReviewDate: todayStr,
+            nextReviewTimestamp: Date.now(),
+            priorityScore: 50,
+            isMastered: false,
+            updatedAt: Date.now(),
+          });
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error(`[Firestore Error] Failed to clear revision history:`, err);
+      }
+    }
+  };
+
+  const toggleHideCard = async (cardId: string): Promise<void> => {
+    const card = revisionCards.find((c) => c.id === cardId);
+    if (!card) return;
+    const newHidden = !card.isHidden;
+    await updateRevisionCard(cardId, { isHidden: newHidden });
+  };
+
   // Calculated Aggregate Stats
   const calculateStats = () => {
     const totalNotes = notes.length;
@@ -827,6 +1261,13 @@ Would you like to try a practice substrate together to test this rule?`,
     const activePlanProgress =
       totalTasksInActivePlan > 0 ? Math.round((completedTasksInActivePlan / totalTasksInActivePlan) * 100) : 0;
 
+    const todayStr = toLocalDateString();
+    const visibleCards = revisionCards.filter((c) => !c.isHidden);
+    const dueRevisionCards = visibleCards.filter(
+      (c) => c.nextReviewDate <= todayStr || c.totalReviews === 0
+    ).length;
+    const masteredCardsCount = visibleCards.filter((c) => c.isMastered || c.status === "Mastered").length;
+
     return {
       totalNotes,
       totalQuizzesTaken,
@@ -834,6 +1275,9 @@ Would you like to try a practice substrate together to test this rule?`,
       tasksCompleted: user?.completedTasksCount || completedTasksInActivePlan,
       activePlanProgress,
       studyStreak: user?.streakDays || 1,
+      totalRevisionCards: visibleCards.length,
+      dueRevisionCards,
+      masteredCardsCount,
     };
   };
 
@@ -865,6 +1309,16 @@ Would you like to try a practice substrate together to test this rule?`,
         addMessageToActiveSession,
         deleteChatSession,
         clearChatSession,
+        updateChatSessionTitle,
+        revisionCards,
+        saveRevisionCards,
+        recordCardReview,
+        updateRevisionCard,
+        deleteRevisionCard,
+        deleteMultipleCards,
+        deleteAllRevisionCards,
+        clearRevisionHistory,
+        toggleHideCard,
         stats: calculateStats(),
       }}
     >

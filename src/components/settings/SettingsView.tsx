@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useData } from "../../context/DataContext";
+import { AtmosphereSelector } from "../common/AtmosphereSelector";
 import {
   User,
   GraduationCap,
@@ -12,6 +13,7 @@ import {
   Sparkles,
   Database,
   CheckCircle2,
+  Palette,
 } from "lucide-react";
 
 export const SettingsView: React.FC = () => {
@@ -140,6 +142,9 @@ export const SettingsView: React.FC = () => {
           </button>
         </div>
       </form>
+
+      {/* Global Environmental Atmosphere Section */}
+      <AtmosphereSelector variant="settings" />
 
       {/* Cloud & Security Architecture Details */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs space-y-3">

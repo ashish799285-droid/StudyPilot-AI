@@ -1,6 +1,6 @@
 {
   "name": "StudyPilot AI",
-  "description": "An intelligent personal learning companion for students featuring AI Study Chat, personalized Study Plans, revision Notes, interactive Quizzes, and Firestore persistence.",
+  "description": "An intelligent personal learning companion for students featuring AI Study Chat, personalized Study Plans, Spaced Repetition Revision, Smart Pomodoro Timer, revision Notes, interactive Quizzes, and Firestore persistence.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

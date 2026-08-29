@@ -129,3 +129,114 @@
   border-top: 2px solid #e2e8f0;
   margin: 1.25rem 0;
 }
+
+/* KaTeX Academic Formula Styling & Mobile Overflow Protection */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+  margin: 0 !important;
+  text-align: center;
+  max-width: 100%;
+}
+
+.katex {
+  font-size: 1.05em;
+  text-rendering: auto;
+  letter-spacing: normal;
+}
+
+.studypilot-content-renderer.compact-mode .katex {
+  font-size: 0.95em;
+}
+
+.studypilot-content-renderer .katex-display > .katex {
+  white-space: normal;
+  text-align: center;
+}
+
+/* Custom scrollbars for math formulas and code blocks on mobile */
+.studypilot-content-renderer ::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+
+.studypilot-content-renderer ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+
+.studypilot-content-renderer ::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.6);
+}
+
+/* StudyPilot Environmental Visual System */
+@keyframes ambientFloatSlow {
+  0%, 100% {
+    transform: translateY(0px) translateX(0px);
+  }
+  50% {
+    transform: translateY(-8px) translateX(4px);
+  }
+}
+
+@keyframes ambientPulseSoft {
+  0%, 100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes sunbeamDrift {
+  0%, 100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: rotate(1.5deg) scale(1.03);
+    opacity: 0.45;
+  }
+}
+
+@keyframes starShimmer {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.1);
+  }
+}
+
+.animate-ambient-float {
+  animation: ambientFloatSlow 12s ease-in-out infinite;
+  will-change: transform;
+}
+
+.animate-ambient-pulse {
+  animation: ambientPulseSoft 8s ease-in-out infinite;
+  will-change: opacity;
+}
+
+.animate-sunbeam {
+  animation: sunbeamDrift 16s ease-in-out infinite;
+  transform-origin: top right;
+  will-change: transform, opacity;
+}
+
+.animate-star-shimmer {
+  animation: starShimmer 4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-ambient-float,
+  .animate-ambient-pulse,
+  .animate-sunbeam,
+  .animate-star-shimmer {
+    animation: none !important;
+    transition: none !important;
+  }
+}
